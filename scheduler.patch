@@ -1,0 +1,971 @@
+diff --git a/lens-api/src/main/resources/example-job.xml b/lens-api/src/main/resources/example-job.xml
+new file mode 100644
+index 0000000..11a5a12
+--- /dev/null
++++ b/lens-api/src/main/resources/example-job.xml
+@@ -0,0 +1,52 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<!--
++
++  Licensed to the Apache Software Foundation (ASF) under one
++  or more contributor license agreements. See the NOTICE file
++  distributed with this work for additional information
++  regarding copyright ownership. The ASF licenses this file
++  to you under the Apache License, Version 2.0 (the
++  "License"); you may not use this file except in compliance
++  with the License. You may obtain a copy of the License at
++
++  http://www.apache.org/licenses/LICENSE-2.0
++
++  Unless required by applicable law or agreed to in writing,
++  software distributed under the License is distributed on an
++  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
++  KIND, either express or implied. See the License for the
++  specific language governing permissions and limitations
++  under the License.
++
++-->
++<job xmlns="uri:lens:job:0.1">
++    <execution>
++        <query>
++            <query>select name from {{queryKey1}};</query>
++            <query_conf>
++                <key>queryKey1</key>
++                <value>table_name</value>
++            </query_conf>
++            <session_db>http://192.168.30.30:5000/</session_db>
++            <session_conf>
++                <key>sessionKey1</key>
++                <value>sessionValue1</value>
++            </session_conf>
++        </query>
++    </execution>
++    <trigger>
++        <frequency timezone="UTC">
++            <!--You can also specify a frequency enum here instead of cron expression e.g.
++            <frequncy_enum>DAILY</frequncy_enum>
++            -->
++            <cron_expression>0 15 10 * * ? 2005</cron_expression> <!-- Fire at 10:15am every day during the year 2005-->
++        </frequency>
++    </trigger>
++    <resource_path>/path/to/resource</resource_path>
++    <job_conf>
++        <key>key1</key>
++        <value>value1</value>
++    </job_conf>
++    <start_time>2014-11-30T00:00Z</start_time>
++    <end_time>2014-11-30T00:00Z</end_time>
++</job>
+\ No newline at end of file
+diff --git a/lens-api/src/main/resources/job-0.1.xsd b/lens-api/src/main/resources/job-0.1.xsd
+new file mode 100644
+index 0000000..b0607c7
+--- /dev/null
++++ b/lens-api/src/main/resources/job-0.1.xsd
+@@ -0,0 +1,192 @@
++<?xml version="1.0" encoding="UTF-8" ?>
++<!--
++
++  Licensed to the Apache Software Foundation (ASF) under one
++  or more contributor license agreements. See the NOTICE file
++  distributed with this work for additional information
++  regarding copyright ownership. The ASF licenses this file
++  to you under the Apache License, Version 2.0 (the
++  "License"); you may not use this file except in compliance
++  with the License. You may obtain a copy of the License at
++
++  http://www.apache.org/licenses/LICENSE-2.0
++
++  Unless required by applicable law or agreed to in writing,
++  software distributed under the License is distributed on an
++  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
++  KIND, either express or implied. See the License for the
++  specific language governing permissions and limitations
++  under the License.
++
++-->
++<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
++           attributeFormDefault="unqualified" elementFormDefault="qualified"
++           targetNamespace="uri:lens:job:0.1" xmlns="uri:lens:job:0.1"
++           xmlns:jaxb="http://java.sun.com/xml/ns/jaxb" jaxb:version="2.1">
++
++    <xs:annotation>
++        <xs:appinfo>
++            <jaxb:schemaBindings>
++                <jaxb:package name="org.apache.lens.api.scheduler" />
++            </jaxb:schemaBindings>
++        </xs:appinfo>
++    </xs:annotation>
++
++    <xs:element name="job" type="x_job" />
++
++    <xs:complexType name="x_job">
++        <xs:annotation>
++            <xs:documentation>
++                XJob represents a job that can be scheduled on lens.
++            </xs:documentation>
++        </xs:annotation>
++        <xs:sequence>
++            <xs:element type="x_execution" name="execution" />
++            <xs:element type="x_trigger" name="trigger" />
++            <xs:element type="xs:string" name="resource_path" minOccurs="0" maxOccurs="unbounded" />
++            <xs:element type="map_type" name="job_conf" minOccurs="0" maxOccurs="unbounded" />
++            <!--TODO add util class and convert it to date_time_string -->
++            <xs:element type="xs:string" name="start_time" />
++            <xs:element type="xs:string" name="end_time" />
++        </xs:sequence>
++    </xs:complexType>
++
++    <xs:complexType name="x_execution">
++        <xs:annotation>
++            <xs:documentation>
++                Task which has to be scheduled. Currently only query is supported.
++            </xs:documentation>
++        </xs:annotation>
++        <xs:choice>
++            <xs:element name="query" type="x_job_query" />
++        </xs:choice>
++    </xs:complexType>
++
++    <xs:complexType name="x_job_query">
++        <xs:annotation>
++            <xs:documentation>
++                A query which is executed in each run of the job.
++            </xs:documentation>
++        </xs:annotation>
++        <xs:sequence>
++            <xs:element name="query" type="non_empty_string" />
++            <xs:element name="query_conf" type="map_type" minOccurs="0" maxOccurs="unbounded" />
++            <xs:element name="session_db" type="xs:string" />
++            <xs:element name="session_conf" type="map_type" minOccurs="0" maxOccurs="unbounded" />
++        </xs:sequence>
++    </xs:complexType>
++
++    <xs:complexType name="x_trigger">
++        <xs:annotation>
++            <xs:documentation>
++                Trigger is the gating condition for an instance of job to be launched.
++                Currently only time based triggers are supported.
++            </xs:documentation>
++        </xs:annotation>
++        <xs:choice>
++            <xs:element name="frequency" type="x_frequency" />
++        </xs:choice>
++    </xs:complexType>
++
++    <xs:complexType name="map_type">
++        <xs:sequence>
++            <xs:element name="key" type="non_empty_string" />
++            <xs:element name="value" type="xs:string" />
++        </xs:sequence>
++    </xs:complexType>
++
++    <xs:complexType name="x_frequency">
++        <xs:annotation>
++            <xs:documentation>
++                Frequency of schedule. Frequency can either be
++                1) an enum from (DAILY, WEEKLY, MONTHLY, QUARTERLY, YEARLY)
++                2) a cron_expression
++            </xs:documentation>
++        </xs:annotation>
++        <xs:choice>
++            <xs:element name="frequncy_enum" type="x_frequency_enum" />
++            <xs:element name="cron_expression" type="x_cron_expression" />
++        </xs:choice>
++        <xs:attribute type="xs:string" name="timezone" />
++    </xs:complexType>
++
++    <xs:simpleType name="x_frequency_enum">
++        <xs:restriction base="xs:string">
++            <xs:enumeration value="DAILY" />
++            <xs:enumeration value="WEEKLY" />
++            <xs:enumeration value="MONTHLY" />
++            <xs:enumeration value="QUARTERLY" />
++            <xs:enumeration value="YEARLY" />
++        </xs:restriction>
++    </xs:simpleType>
++
++    <xs:simpleType name="x_cron_expression">
++        <xs:annotation>
++            <xs:documentation>
++                Source: https://quartz-scheduler.org/xml/job_scheduling_data_1_8.xsd
++                To examine you can break it up visually like as below.
++                SECONDS: (
++                ((([0-9]|[0-5][0-9])(-([0-9]|[0-5][0-9]))?,)*([0-9]|[0-5][0-9])(-([0-9]|[0-5][0-9]))?)
++                | (([\*]|[0-9]|[0-5][0-9])/([0-9]|[0-5][0-9])) | ([\?])
++                | ([\*]) ) [\s] MINUTES: (
++                ((([0-9]|[0-5][0-9])(-([0-9]|[0-5][0-9]))?,)*([0-9]|[0-5][0-9])(-([0-9]|[0-5][0-9]))?)
++                | (([\*]|[0-9]|[0-5][0-9])/([0-9]|[0-5][0-9])) | ([\?])
++                | ([\*]) ) [\s] HOURS: (
++                ((([0-9]|[0-1][0-9]|[2][0-3])(-([0-9]|[0-1][0-9]|[2][0-3]))?,)*([0-9]|[0-1][0-9]|[2][0-3])(-([0-9]|[0-1][0-9]|[2][0-3]))?)
++                |
++                (([\*]|[0-9]|[0-1][0-9]|[2][0-3])/([0-9]|[0-1][0-9]|[2][0-3]))
++                | ([\?]) | ([\*]) ) [\s] DAY OF MONTH: (
++                ((([1-9]|[0][1-9]|[1-2][0-9]|[3][0-1])(-([1-9]|[0][1-9]|[1-2][0-9]|[3][0-1]))?,)*([1-9]|[0][1-9]|[1-2][0-9]|[3][0-1])(-([1-9]|[0][1-9]|[1-2][0-9]|[3][0-1]))?(C)?)
++                |
++                (([1-9]|[0][1-9]|[1-2][0-9]|[3][0-1])/([1-9]|[0][1-9]|[1-2][0-9]|[3][0-1])(C)?)
++                | (L(-[0-9])?) | (L(-[1-2][0-9])?) | (L(-[3][0-1])?) |
++                (LW) | ([1-9]W) | ([1-3][0-9]W) | ([\?]) | ([\*]) )[\s]
++                MONTH: (
++                ((([1-9]|0[1-9]|1[0-2])(-([1-9]|0[1-9]|1[0-2]))?,)*([1-9]|0[1-9]|1[0-2])(-([1-9]|0[1-9]|1[0-2]))?)
++                | (([1-9]|0[1-9]|1[0-2])/([1-9]|0[1-9]|1[0-2])) |
++                (((JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)(-(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC))?,)*(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)(-(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC))?)
++                |
++                ((JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)/(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC))
++                | ([\?]) | ([\*]) )[\s] DAY OF WEEK: (
++                (([1-7](-([1-7]))?,)*([1-7])(-([1-7]))?) |
++                ([1-7]/([1-7])) |
++                (((MON|TUE|WED|THU|FRI|SAT|SUN)(-(MON|TUE|WED|THU|FRI|SAT|SUN))?,)*(MON|TUE|WED|THU|FRI|SAT|SUN)(-(MON|TUE|WED|THU|FRI|SAT|SUN))?(C)?)
++                |
++                ((MON|TUE|WED|THU|FRI|SAT|SUN)/(MON|TUE|WED|THU|FRI|SAT|SUN)(C)?)
++                | (([1-7]|(MON|TUE|WED|THU|FRI|SAT|SUN))(L|LW)?) |
++                (([1-7]|MON|TUE|WED|THU|FRI|SAT|SUN)#([1-7])?) | ([\?])
++                | ([\*]) ) YEAR (OPTIONAL): ( [\s]? ([\*])? |
++                ((19[7-9][0-9])|(20[0-9][0-9]))? |
++                (((19[7-9][0-9])|(20[0-9][0-9]))/((19[7-9][0-9])|(20[0-9][0-9])))?
++                |
++                ((((19[7-9][0-9])|(20[0-9][0-9]))(-((19[7-9][0-9])|(20[0-9][0-9])))?,)*((19[7-9][0-9])|(20[0-9][0-9]))(-((19[7-9][0-9])|(20[0-9][0-9])))?)?
++                )
++            </xs:documentation>
++        </xs:annotation>
++        <xs:restriction base="xs:string">
++            <xs:pattern
++                    value="(((([0-9]|[0-5][0-9])(-([0-9]|[0-5][0-9]))?,)*([0-9]|[0-5][0-9])(-([0-9]|[0-5][0-9]))?)|(([\*]|[0-9]|[0-5][0-9])/([0-9]|[0-5][0-9]))|([\?])|([\*]))[\s](((([0-9]|[0-5][0-9])(-([0-9]|[0-5][0-9]))?,)*([0-9]|[0-5][0-9])(-([0-9]|[0-5][0-9]))?)|(([\*]|[0-9]|[0-5][0-9])/([0-9]|[0-5][0-9]))|([\?])|([\*]))[\s](((([0-9]|[0-1][0-9]|[2][0-3])(-([0-9]|[0-1][0-9]|[2][0-3]))?,)*([0-9]|[0-1][0-9]|[2][0-3])(-([0-9]|[0-1][0-9]|[2][0-3]))?)|(([\*]|[0-9]|[0-1][0-9]|[2][0-3])/([0-9]|[0-1][0-9]|[2][0-3]))|([\?])|([\*]))[\s](((([1-9]|[0][1-9]|[1-2][0-9]|[3][0-1])(-([1-9]|[0][1-9]|[1-2][0-9]|[3][0-1]))?,)*([1-9]|[0][1-9]|[1-2][0-9]|[3][0-1])(-([1-9]|[0][1-9]|[1-2][0-9]|[3][0-1]))?(C)?)|(([1-9]|[0][1-9]|[1-2][0-9]|[3][0-1])/([1-9]|[0][1-9]|[1-2][0-9]|[3][0-1])(C)?)|(L(-[0-9])?)|(L(-[1-2][0-9])?)|(L(-[3][0-1])?)|(LW)|([1-9]W)|([1-3][0-9]W)|([\?])|([\*]))[\s](((([1-9]|0[1-9]|1[0-2])(-([1-9]|0[1-9]|1[0-2]))?,)*([1-9]|0[1-9]|1[0-2])(-([1-9]|0[1-9]|1[0-2]))?)|(([1-9]|0[1-9]|1[0-2])/([1-9]|0[1-9]|1[0-2]))|(((JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)(-(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC))?,)*(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)(-(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC))?)|((JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)/(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC))|([\?])|([\*]))[\s]((([1-7](-([1-7]))?,)*([1-7])(-([1-7]))?)|([1-7]/([1-7]))|(((MON|TUE|WED|THU|FRI|SAT|SUN)(-(MON|TUE|WED|THU|FRI|SAT|SUN))?,)*(MON|TUE|WED|THU|FRI|SAT|SUN)(-(MON|TUE|WED|THU|FRI|SAT|SUN))?(C)?)|((MON|TUE|WED|THU|FRI|SAT|SUN)/(MON|TUE|WED|THU|FRI|SAT|SUN)(C)?)|(([1-7]|(MON|TUE|WED|THU|FRI|SAT|SUN))?(L|LW)?)|(([1-7]|MON|TUE|WED|THU|FRI|SAT|SUN)#([1-7])?)|([\?])|([\*]))([\s]?(([\*])?|(19[7-9][0-9])|(20[0-9][0-9]))?| (((19[7-9][0-9])|(20[0-9][0-9]))/((19[7-9][0-9])|(20[0-9][0-9])))?| ((((19[7-9][0-9])|(20[0-9][0-9]))(-((19[7-9][0-9])|(20[0-9][0-9])))?,)*((19[7-9][0-9])|(20[0-9][0-9]))(-((19[7-9][0-9])|(20[0-9][0-9])))?)?)" />
++        </xs:restriction>
++    </xs:simpleType>
++
++    <!-- TODO: Uncomment after adding utility classes
++    <xs:simpleType name="date_time_type">
++        <xs:annotation>
++            <xs:appinfo>
++                <jaxb:javaType name="java.util.Date" parseMethod="org.apache.lens.DateUtil.parseDateUTC"
++                               printMethod="org.apache.lens.DateUtil.formatDateUTC"/>
++            </xs:appinfo>
++        </xs:annotation>
++        <xs:restriction base="xs:string">
++            <xs:pattern
++                    value="((19|20)\d\d[- /.](0[1-9]|1[012])[- /.](0[1-9]|[12][0-9]|3[01])T([0-1][0-9]|2[0-3]):([0-5][0-9]))Z"/>
++        </xs:restriction>
++    </xs:simpleType>
++    -->
++    <xs:simpleType name="non_empty_string">
++        <xs:restriction base="xs:string">
++            <xs:minLength value="1"/>
++        </xs:restriction>
++    </xs:simpleType>
++
++</xs:schema>
+\ No newline at end of file
+diff --git a/lens-server-api/src/main/java/org/apache/lens/server/api/scheduler/JobInfo.java b/lens-server-api/src/main/java/org/apache/lens/server/api/scheduler/JobInfo.java
+new file mode 100644
+index 0000000..18f6ff8
+--- /dev/null
++++ b/lens-server-api/src/main/java/org/apache/lens/server/api/scheduler/JobInfo.java
+@@ -0,0 +1,127 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ *
++ *   http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing,
++ * software distributed under the License is distributed on an
++ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
++ * KIND, either express or implied.  See the License for the
++ * specific language governing permissions and limitations
++ * under the License.
++ */
++package org.apache.lens.server.api.scheduler;
++
++import lombok.Getter;
++import lombok.Setter;
++import lombok.ToString;
++
++import java.sql.Clob;
++
++/**
++ * POJO to represent the <code>job</code> table in the database.
++ */
++@ToString
++public class JobInfo {
++
++    /**
++     * ID of the job.
++     * Each job has a unique id which can be used to query it.
++     *
++     * @param age New value for ID.
++     * @return ID for the current job.
++     */
++    @Getter
++    @Setter
++    private String id;
++
++    /**
++     * Job submitted by user as represented by XJob.
++     * @param new job definition.
++     * @return job configuration of this object.
++     */
++    @Getter
++    @Setter
++    private Clob job;
++
++    /**
++     * Trigger object for the job.
++     * @param
++     * @return
++     *
++     */
++    @Getter
++    @Setter
++    private Clob trigger;
++
++    /**
++     * @param
++     * @return
++     */
++    @Getter
++    @Setter
++    private Clob resourcePath;
++
++    /**
++     * @param
++     * @return
++     */
++    @Getter
++    @Setter
++    private Clob jobConf;
++
++    /**
++     * @param
++     * @return
++     */
++    @Getter
++    @Setter
++    private long startTime;
++
++    /**
++     * @param
++     * @return
++     */
++    @Getter
++    @Setter
++    private long endTime;
++
++    /**
++     * @param
++     * @return
++     */
++    @Getter
++    @Setter
++    private String userName;
++
++    /**
++     * @param
++     * @return
++     */
++    @Getter
++    @Setter
++    private String status;
++
++    /**
++     * @param
++     * @return
++     */
++    @Getter
++    @Setter
++    private long created_on;
++
++    /**
++     * @param
++     * @return
++     */
++    @Getter
++    @Setter
++    private long modified_on;
++
++}
+diff --git a/lens-server-api/src/main/java/org/apache/lens/server/api/scheduler/JobInstanceInfo.java b/lens-server-api/src/main/java/org/apache/lens/server/api/scheduler/JobInstanceInfo.java
+new file mode 100644
+index 0000000..8126eaa
+--- /dev/null
++++ b/lens-server-api/src/main/java/org/apache/lens/server/api/scheduler/JobInstanceInfo.java
+@@ -0,0 +1,110 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ *
++ *   http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing,
++ * software distributed under the License is distributed on an
++ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
++ * KIND, either express or implied.  See the License for the
++ * specific language governing permissions and limitations
++ * under the License.
++ */
++package org.apache.lens.server.api.scheduler;
++
++import lombok.Getter;
++import lombok.Setter;
++import lombok.ToString;
++
++/**
++ * POJO representing a row in the <code>job_instance</code> table in the database.
++ */
++@ToString
++public class JobInstanceInfo {
++    /**
++     * @param
++     * @return
++     */
++    @Getter
++    @Setter
++    private String id;
++
++    /**
++     * @param
++     * @return
++     */
++    @Getter
++    @Setter
++    private String sessionHandle;
++
++    /**
++     * @param
++     * @return
++     */
++    @Getter
++    @Setter
++    private String runHandle;
++
++    /**
++     * @param
++     * @return
++     */
++    @Getter
++    @Setter
++    private long startTime;
++
++    /**
++     * @param
++     * @return
++     */
++    @Getter
++    @Setter
++    private long endTime;
++
++    /**
++     * @param
++     * @return
++     */
++    @Getter
++    @Setter
++    private String resultPath;
++
++    /**
++     * @param
++     * @return
++     */
++    @Getter
++    @Setter
++    private String query;
++
++    /**
++     * @param
++     * @return
++     */
++    @Getter
++    @Setter
++    private String status;
++
++    /**
++     * @param
++     * @return
++     */
++    @Getter
++    @Setter
++    private long created_on;
++
++    /**
++     * @param
++     * @return
++     */
++    @Getter
++    @Setter
++    private long modified_on;
++
++}
+diff --git a/lens-server-api/src/main/java/org/apache/lens/server/api/scheduler/QuerySchedulerService.java b/lens-server-api/src/main/java/org/apache/lens/server/api/scheduler/QuerySchedulerService.java
+deleted file mode 100644
+index 9f48d27..0000000
+--- a/lens-server-api/src/main/java/org/apache/lens/server/api/scheduler/QuerySchedulerService.java
++++ /dev/null
+@@ -1,26 +0,0 @@
+-/**
+- * Licensed to the Apache Software Foundation (ASF) under one
+- * or more contributor license agreements.  See the NOTICE file
+- * distributed with this work for additional information
+- * regarding copyright ownership.  The ASF licenses this file
+- * to you under the Apache License, Version 2.0 (the
+- * "License"); you may not use this file except in compliance
+- * with the License.  You may obtain a copy of the License at
+- *
+- *   http://www.apache.org/licenses/LICENSE-2.0
+- *
+- * Unless required by applicable law or agreed to in writing,
+- * software distributed under the License is distributed on an
+- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+- * KIND, either express or implied.  See the License for the
+- * specific language governing permissions and limitations
+- * under the License.
+- */
+-package org.apache.lens.server.api.scheduler;
+-
+-/**
+- * The Interface QuerySchedulerService.
+- */
+-public interface QuerySchedulerService {
+-
+-}
+diff --git a/lens-server-api/src/main/java/org/apache/lens/server/api/scheduler/SchedulerService.java b/lens-server-api/src/main/java/org/apache/lens/server/api/scheduler/SchedulerService.java
+new file mode 100644
+index 0000000..0b7c71a
+--- /dev/null
++++ b/lens-server-api/src/main/java/org/apache/lens/server/api/scheduler/SchedulerService.java
+@@ -0,0 +1,151 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ *
++ *   http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing,
++ * software distributed under the License is distributed on an
++ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
++ * KIND, either express or implied.  See the License for the
++ * specific language governing permissions and limitations
++ * under the License.
++ */
++package org.apache.lens.server.api.scheduler;
++
++import org.apache.lens.api.LensSessionHandle;
++import org.apache.lens.api.scheduler.XJob;
++import org.apache.lens.server.api.error.LensException;
++
++import java.util.Date;
++import java.util.List;
++
++/**
++ * The Interface SchedulerService.
++ * TODO: throttling, retries.
++ */
++public interface SchedulerService {
++
++    /**
++     * Schedule a job.
++     * @param sessionHandle
++     * @param job
++     * @return true/false, based on whether job was scheduled successfully or not
++     * @throws LensException
++     */
++    public String scheduleJob(LensSessionHandle sessionHandle, XJob job) throws LensException;
++
++
++    /**
++     *
++     * @param sessionHandle
++     * @param jobID
++     * @return
++     * @throws LensException
++     */
++    public XJob getJobDefinition(LensSessionHandle sessionHandle, String jobID) throws LensException;
++
++
++    /**
++     *
++     * @param sessionHandle
++     * @param jobID id of the job which you want to update.
++     * @param newJobDefinition
++     * @return true or false based on whether the update was successful or failed.
++     * @throws LensException
++     */
++    public boolean updateJob(LensSessionHandle sessionHandle,
++                                  String jobID, XJob newJobDefinition) throws LensException;
++
++
++    /**
++     *
++     * @param sessionHandle
++     * @param jobID
++     * @param expiryTime
++     * @throws LensException
++     */
++    public void expireJob(LensSessionHandle sessionHandle,
++                          String jobID, Date expiryTime) throws LensException;
++
++
++    /**
++     *
++     * @param sessionHandle
++     * @param jobID
++     * @return
++     * @throws LensException
++     */
++    public boolean suspendJob(LensSessionHandle sessionHandle, String jobID) throws LensException;
++
++
++    /**
++     *
++     * @param sessionHandle
++     * @param jobID
++     * @param effectiveTime time from which to resume the instances.
++     * @return
++     * @throws LensException
++     */
++    public boolean resumeJob(LensSessionHandle sessionHandle,
++                             String jobID, Date effectiveTime) throws LensException;
++
++    /**
++     *
++     * @param sessionHandle
++     * @param jobID
++     * @return
++     * @throws LensException
++     */
++    public boolean deleteJob(LensSessionHandle sessionHandle, String jobID) throws LensException;
++
++
++    /**
++     * TODO create pojo for stats, does one exist already?
++     * @param sessionHandle
++     * @param jobID
++     * @throws LensException
++     */
++    public void getJobStats(LensSessionHandle sessionHandle, String jobID) throws LensException;
++
++
++    /**
++     * Reruns a job instance.
++     * @param sessionHandle
++     * @param jobID
++     * @param instanceID
++     * @return
++     * @throws LensException
++     */
++    public boolean rerunInstance(LensSessionHandle sessionHandle,
++                                 String jobID, String instanceID) throws LensException;
++
++    /**
++     *
++     * @param sessionHandle
++     * @param jobID
++     * @param numResults - default 100
++     * @return
++     * @throws LensException
++     */
++    public List<String> getJobInstances(LensSessionHandle sessionHandle,
++                                        String jobID, Long numResults) throws LensException;
++
++    /**
++     *
++     * @param sessionHandle
++     * @param jobID
++     * @param instanceID
++     * @return
++     * @throws LensException
++     */
++    public JobInstanceInfo getInstanceDetails(LensSessionHandle sessionHandle,
++                                                String jobID, String instanceID) throws LensException;
++
++
++}
+diff --git a/lens-server/src/main/java/org/apache/lens/server/metrics/MetricsServiceImpl.java b/lens-server/src/main/java/org/apache/lens/server/metrics/MetricsServiceImpl.java
+index 3389aba..61cf2a2 100644
+--- a/lens-server/src/main/java/org/apache/lens/server/metrics/MetricsServiceImpl.java
++++ b/lens-server/src/main/java/org/apache/lens/server/metrics/MetricsServiceImpl.java
+@@ -48,7 +48,7 @@ import org.apache.lens.server.api.session.SessionService;
+ import org.apache.lens.server.healthcheck.LensServiceHealthCheck;
+ import org.apache.lens.server.query.QueryExecutionServiceImpl;
+ import org.apache.lens.server.quota.QuotaServiceImpl;
+-import org.apache.lens.server.scheduler.QuerySchedulerServiceImpl;
++import org.apache.lens.server.scheduler.QuerySchedulerService;
+ import org.apache.lens.server.session.DatabaseResourceService;
+ import org.apache.lens.server.session.HiveSessionService;
+ 
+@@ -263,7 +263,7 @@ public class MetricsServiceImpl extends AbstractService implements MetricsServic
+     healthCheck.register(CubeMetastoreService.NAME, new LensServiceHealthCheck(CubeMetastoreService.NAME));
+     healthCheck.register(HiveSessionService.NAME, new LensServiceHealthCheck(HiveSessionService.NAME));
+     healthCheck.register(QueryExecutionServiceImpl.NAME, new LensServiceHealthCheck(QueryExecutionServiceImpl.NAME));
+-    healthCheck.register(QuerySchedulerServiceImpl.NAME, new LensServiceHealthCheck(QuerySchedulerServiceImpl.NAME));
++    healthCheck.register(QuerySchedulerService.NAME, new LensServiceHealthCheck(QuerySchedulerService.NAME));
+     healthCheck.register(QuotaServiceImpl.NAME, new LensServiceHealthCheck(QuotaServiceImpl.NAME));
+     healthCheck.register(MetricsServiceImpl.NAME, new LensServiceHealthCheck(MetricsServiceImpl.NAME));
+     healthCheck.register(EventServiceImpl.NAME, new LensServiceHealthCheck(EventServiceImpl.NAME));
+diff --git a/lens-server/src/main/java/org/apache/lens/server/scheduler/QuerySchedulerService.java b/lens-server/src/main/java/org/apache/lens/server/scheduler/QuerySchedulerService.java
+new file mode 100644
+index 0000000..c81d59b
+--- /dev/null
++++ b/lens-server/src/main/java/org/apache/lens/server/scheduler/QuerySchedulerService.java
+@@ -0,0 +1,138 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ *
++ *   http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing,
++ * software distributed under the License is distributed on an
++ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
++ * KIND, either express or implied.  See the License for the
++ * specific language governing permissions and limitations
++ * under the License.
++ */
++package org.apache.lens.server.scheduler;
++
++import org.apache.hive.service.cli.CLIService;
++import org.apache.lens.api.LensSessionHandle;
++import org.apache.lens.api.scheduler.XJob;
++import org.apache.lens.server.BaseLensService;
++import org.apache.lens.server.api.error.LensException;
++import org.apache.lens.server.api.health.HealthStatus;
++import org.apache.lens.server.api.scheduler.JobInstanceInfo;
++import org.apache.lens.server.api.scheduler.SchedulerService;
++
++import java.util.Date;
++import java.util.List;
++
++/**
++ * The Class QuerySchedulerService.
++ */
++public class QuerySchedulerService extends BaseLensService implements SchedulerService {
++
++  /**
++   * The constant name for scheduler service.
++   */
++  public static final String NAME = "scheduler";
++
++  /**
++   * Instantiates a new query scheduler service.
++   *
++   * @param cliService the cli service
++   */
++  public QuerySchedulerService(CLIService cliService) {
++    super(NAME, cliService);
++  }
++
++  /**
++   * {@inheritDoc}
++   */
++  @Override
++  public HealthStatus getHealthStatus() {
++    return this.getServiceState().equals(STATE.STARTED)
++        ? new HealthStatus(true, "Query scheduler service is healthy.")
++        : new HealthStatus(false, "Query scheduler service is down.");
++  }
++
++  /**
++   * {@inheritDoc}
++   */
++  @Override
++  public String scheduleJob(LensSessionHandle sessionHandle, XJob job) throws LensException {
++    return null;
++  }
++
++  /**
++   * {@inheritDoc}
++   */
++  @Override
++  public XJob getJobDefinition(LensSessionHandle sessionHandle, String jobID) throws LensException {
++    return null;
++  }
++
++  /**
++   * {@inheritDoc}
++   */
++  @Override
++  public boolean updateJob(LensSessionHandle sessionHandle, String jobID, XJob newJobDefinition) throws LensException {
++    return false;
++  }
++
++  @Override
++  public void expireJob(LensSessionHandle sessionHandle, String jobID, Date expiryTime) throws LensException {
++
++  }
++
++  @Override
++  public boolean suspendJob(LensSessionHandle sessionHandle, String jobID) throws LensException {
++    return false;
++  }
++
++  @Override
++  public boolean resumeJob(LensSessionHandle sessionHandle, String jobID, Date effectiveTime) throws LensException {
++    return false;
++  }
++
++  /**
++   * {@inheritDoc}
++   */
++  @Override
++  public boolean deleteJob(LensSessionHandle sessionHandle, String jobID) throws LensException {
++    return false;
++  }
++
++  @Override
++  public void getJobStats(LensSessionHandle sessionHandle, String jobID) throws LensException {
++
++  }
++
++  /**
++   * {@inheritDoc}
++   */
++  @Override
++  public boolean rerunInstance(LensSessionHandle sessionHandle, String jobID, String instanceID) throws LensException {
++    return false;
++  }
++
++  /**
++   * {@inheritDoc}
++   */
++  @Override
++  public List<String> getJobInstances(LensSessionHandle sessionHandle, String jobID, Long numResults) throws LensException {
++    return null;
++  }
++
++  /**
++   * {@inheritDoc}
++   */
++  @Override
++  public JobInstanceInfo getInstanceDetails(LensSessionHandle sessionHandle, String jobID,
++                                            String instanceID) throws LensException {
++    return null;
++  }
++}
+diff --git a/lens-server/src/main/java/org/apache/lens/server/scheduler/QuerySchedulerServiceImpl.java b/lens-server/src/main/java/org/apache/lens/server/scheduler/QuerySchedulerServiceImpl.java
+deleted file mode 100644
+index 24949bd..0000000
+--- a/lens-server/src/main/java/org/apache/lens/server/scheduler/QuerySchedulerServiceImpl.java
++++ /dev/null
+@@ -1,55 +0,0 @@
+-/**
+- * Licensed to the Apache Software Foundation (ASF) under one
+- * or more contributor license agreements.  See the NOTICE file
+- * distributed with this work for additional information
+- * regarding copyright ownership.  The ASF licenses this file
+- * to you under the Apache License, Version 2.0 (the
+- * "License"); you may not use this file except in compliance
+- * with the License.  You may obtain a copy of the License at
+- *
+- *   http://www.apache.org/licenses/LICENSE-2.0
+- *
+- * Unless required by applicable law or agreed to in writing,
+- * software distributed under the License is distributed on an
+- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+- * KIND, either express or implied.  See the License for the
+- * specific language governing permissions and limitations
+- * under the License.
+- */
+-package org.apache.lens.server.scheduler;
+-
+-import org.apache.lens.server.BaseLensService;
+-import org.apache.lens.server.api.health.HealthStatus;
+-import org.apache.lens.server.api.scheduler.QuerySchedulerService;
+-
+-import org.apache.hive.service.cli.CLIService;
+-
+-/**
+- * The Class QuerySchedulerServiceImpl.
+- */
+-public class QuerySchedulerServiceImpl extends BaseLensService implements QuerySchedulerService {
+-
+-  /**
+-   * The constant name for scheduler service.
+-   */
+-  public static final String NAME = "scheduler";
+-
+-  /**
+-   * Instantiates a new query scheduler service impl.
+-   *
+-   * @param cliService the cli service
+-   */
+-  public QuerySchedulerServiceImpl(CLIService cliService) {
+-    super(NAME, cliService);
+-  }
+-
+-  /**
+-   * {@inheritDoc}
+-   */
+-  @Override
+-  public HealthStatus getHealthStatus() {
+-    return this.getServiceState().equals(STATE.STARTED)
+-        ? new HealthStatus(true, "Query scheduler service is healthy.")
+-        : new HealthStatus(false, "Query scheduler service is down.");
+-  }
+-}
+diff --git a/lens-server/src/main/resources/lensserver-default.xml b/lens-server/src/main/resources/lensserver-default.xml
+index 5f268cb..fc3775e 100644
+--- a/lens-server/src/main/resources/lensserver-default.xml
++++ b/lens-server/src/main/resources/lensserver-default.xml
+@@ -91,7 +91,7 @@
+ 
+   <property>
+     <name>lens.server.scheduler.service.impl</name>
+-    <value>org.apache.lens.server.scheduler.QuerySchedulerServiceImpl</value>
++    <value>org.apache.lens.server.scheduler.QuerySchedulerService</value>
+     <description>Implementation class for query scheduler service</description>
+   </property>
+ 
+diff --git a/lens-server/src/test/java/org/apache/lens/server/healthcheck/TestHealthChecks.java b/lens-server/src/test/java/org/apache/lens/server/healthcheck/TestHealthChecks.java
+index e11413e..d0ad9ed 100644
+--- a/lens-server/src/test/java/org/apache/lens/server/healthcheck/TestHealthChecks.java
++++ b/lens-server/src/test/java/org/apache/lens/server/healthcheck/TestHealthChecks.java
+@@ -32,7 +32,7 @@ import org.apache.lens.server.metastore.CubeMetastoreServiceImpl;
+ import org.apache.lens.server.metastore.MetastoreApp;
+ import org.apache.lens.server.metrics.MetricsServiceImpl;
+ import org.apache.lens.server.quota.QuotaServiceImpl;
+-import org.apache.lens.server.scheduler.QuerySchedulerServiceImpl;
++import org.apache.lens.server.scheduler.QuerySchedulerService;
+ import org.apache.lens.server.session.HiveSessionService;
+ 
+ import org.glassfish.jersey.client.ClientConfig;
+@@ -93,7 +93,7 @@ public class TestHealthChecks extends LensJerseyTest {
+ 
+   @Test
+   public void testQuerySchedulerServiceHealth() throws Exception {
+-    checkHealth(QuerySchedulerServiceImpl.NAME);
++    checkHealth(QuerySchedulerService.NAME);
+   }
+ 
+   @Test
+diff --git a/src/site/apt/admin/config.apt b/src/site/apt/admin/config.apt
+index 88c1489..7cb9759 100644
+--- a/src/site/apt/admin/config.apt
++++ b/src/site/apt/admin/config.apt
+@@ -165,7 +165,7 @@ Lens server configuration
+ *--+--+---+--+
+ |68|lens.server.savedquery.ws.resource.impl|org.apache.lens.server.query.save.SavedQueryResource|Implementation class for Saved query Resource|
+ *--+--+---+--+
+-|69|lens.server.scheduler.service.impl|org.apache.lens.server.scheduler.QuerySchedulerServiceImpl|Implementation class for query scheduler service|
++|69|lens.server.scheduler.service.impl|org.apache.lens.server.scheduler.QuerySchedulerService|Implementation class for query scheduler service|
+ *--+--+---+--+
+ |70|lens.server.scheduler.ws.resource.impl|org.apache.lens.server.scheduler.ScheduleResource|Implementation class for query scheduler resource|
+ *--+--+---+--+
