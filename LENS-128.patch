@@ -1,8 +1,25 @@
-commit 28dd7f28af91f9412b8f0658b7863c08fe5e8de3
-Author: Ajay Yadava <ajaynsit@gmail.com>
-Date:   Mon Feb 1 23:44:14 2016 +0530
+From d773ad100dfa5e26ddcf3d972f8d3ccf48559183 Mon Sep 17 00:00:00 2001
+From: Ajay Yadava <ajaynsit@gmail.com>
+Date: Mon, 1 Feb 2016 23:44:14 +0530
+Subject: [PATCH 1/2] Scheduler WIP
 
-    Scheduler WIP
+---
+ .../server/api/scheduler/SchedulerService.java     |   3 +
+ .../lens/server/scheduler/InstanceState.java       | 173 ++++++++++++++
+ .../org/apache/lens/server/scheduler/JobState.java | 154 ++++++++++++
+ .../lens/server/scheduler/LensScheduler.java       |  52 ++++
+ .../lens/server/scheduler/ScheduleResource.java    | 265 ++++++++++++++++++++-
+ .../server/scheduler/SchedulerServiceImpl.java     |   5 +
+ .../apache/lens/server/scheduler/StateMachine.java |  18 ++
+ .../notification/services/AlarmService.java        |  25 ++
+ .../services/DataAvailabilityService.java          |  26 ++
+ 9 files changed, 719 insertions(+), 2 deletions(-)
+ create mode 100644 lens-server/src/main/java/org/apache/lens/server/scheduler/InstanceState.java
+ create mode 100644 lens-server/src/main/java/org/apache/lens/server/scheduler/JobState.java
+ create mode 100644 lens-server/src/main/java/org/apache/lens/server/scheduler/LensScheduler.java
+ create mode 100644 lens-server/src/main/java/org/apache/lens/server/scheduler/StateMachine.java
+ create mode 100644 lens-server/src/main/java/org/apache/lens/server/scheduler/notification/services/AlarmService.java
+ create mode 100644 lens-server/src/main/java/org/apache/lens/server/scheduler/notification/services/DataAvailabilityService.java
 
 diff --git a/lens-server-api/src/main/java/org/apache/lens/server/api/scheduler/SchedulerService.java b/lens-server-api/src/main/java/org/apache/lens/server/api/scheduler/SchedulerService.java
 index b6ec093..0774852 100644
@@ -359,10 +376,10 @@ index 0000000..6517873
 +}
 diff --git a/lens-server/src/main/java/org/apache/lens/server/scheduler/LensScheduler.java b/lens-server/src/main/java/org/apache/lens/server/scheduler/LensScheduler.java
 new file mode 100644
-index 0000000..4b73a23
+index 0000000..a5ab8a4
 --- /dev/null
 +++ b/lens-server/src/main/java/org/apache/lens/server/scheduler/LensScheduler.java
-@@ -0,0 +1,37 @@
+@@ -0,0 +1,52 @@
 +/**
 + * Licensed to the Apache Software Foundation (ASF) under one
 + * or more contributor license agreements.  See the NOTICE file
@@ -399,6 +416,21 @@ index 0000000..4b73a23
 +
 +    // list of services for scheduler.
 +    // submitted -> scheduled -> expired ->
++  // scheduler accepts query schedule commands.
++  // then a thread keeps spawning instances of each job and registers them for their specific notification requests.
++  // each notification service notifies scheduler of a trigger availability. Once the trigger is available then
++  // scheduler checks if all required conditions are met, if yes then the scheduler puts instance in ready state.
++  // once the instance is in ready state, if there are no throttling limits or other prioritisation constraints
++  // the instance is executed and moved to Running state.
++
++  // Scheduler has following main tasks -
++  // 1. accept schedule requests.
++  // 2. keep spawning new instances
++  // 3. listen for notifications
++  // 4. check for throttling / prioritisation constraints
++  // 5. schedule the instances.
++  // 6. listen for the completion notifications.
++  //
 +}
 diff --git a/lens-server/src/main/java/org/apache/lens/server/scheduler/ScheduleResource.java b/lens-server/src/main/java/org/apache/lens/server/scheduler/ScheduleResource.java
 index abc4621..fa68f94 100644
@@ -688,6 +720,47 @@ index abc4621..fa68f94 100644
 +    }
    }
  }
+diff --git a/lens-server/src/main/java/org/apache/lens/server/scheduler/SchedulerServiceImpl.java b/lens-server/src/main/java/org/apache/lens/server/scheduler/SchedulerServiceImpl.java
+index ce98601..f9c3273 100644
+--- a/lens-server/src/main/java/org/apache/lens/server/scheduler/SchedulerServiceImpl.java
++++ b/lens-server/src/main/java/org/apache/lens/server/scheduler/SchedulerServiceImpl.java
+@@ -69,6 +69,7 @@ public class SchedulerServiceImpl extends BaseLensService implements SchedulerSe
+    */
+   @Override
+   public SchedulerJobHandle submitJob(LensSessionHandle sessionHandle, XJob job) throws LensException {
++    // take a job, validate it, submit it to scheduler (check that there are no duplicates, will persist it)
+     return null;
+   }
+ 
+@@ -78,10 +79,12 @@ public class SchedulerServiceImpl extends BaseLensService implements SchedulerSe
+   @Override
+   public void scheduleJob(LensSessionHandle sessionHandle,
+                                         SchedulerJobHandle jobHandle) throws LensException {
++    // send the schedule request to the scheduler.
+   }
+ 
+   @Override
+   public SchedulerJobHandle submitAndScheduleJob(LensSessionHandle sessionHandle, XJob job) throws LensException {
++    // take job, validate it, submit it(check duplicate, persist it), schedule it.
+     return null;
+   }
+ 
+@@ -90,6 +93,7 @@ public class SchedulerServiceImpl extends BaseLensService implements SchedulerSe
+    */
+   @Override
+   public XJob getJobDefinition(LensSessionHandle sessionHandle, SchedulerJobHandle jobHandle) throws LensException {
++    // get the job definition from the persisted store, return it.
+     return null;
+   }
+ 
+@@ -99,6 +103,7 @@ public class SchedulerServiceImpl extends BaseLensService implements SchedulerSe
+   @Override
+   public SchedulerJobInfo getJobDetails(LensSessionHandle sessionHandle,
+                                         SchedulerJobHandle jobHandle) throws LensException {
++    // get job details from the database.
+     return null;
+   }
+ 
 diff --git a/lens-server/src/main/java/org/apache/lens/server/scheduler/StateMachine.java b/lens-server/src/main/java/org/apache/lens/server/scheduler/StateMachine.java
 new file mode 100644
 index 0000000..54ab6a3
@@ -775,3 +848,432 @@ index 0000000..9bef064
 +public class DataAvailabilityService {
 +
 +}
+-- 
+1.9.1
+
+
+From 76902bae4e609c8dd3773a547d9505fe45c4f5fe Mon Sep 17 00:00:00 2001
+From: Ajay Yadava <ajaynsit@gmail.com>
+Date: Mon, 29 Feb 2016 02:48:37 +0530
+Subject: [PATCH 2/2] State Store in progress
+
+Added both the store and the dao, as unsure about the better approach, currently working with DAO for sake of consistency.
+Need to decide table schema.
+Need to decide the structure of id (should it be structured like oozie so that it is easy to find out the instances of a job?)
+What will happen to the instance id if it is rerun again?
+Need to complete the state machines.
+Need to add tests.
+Need to integrate with the existing query service.
+---
+ .../lens/server/scheduler/ScheduleResource.java    |   2 +-
+ .../server/scheduler/SchedulerServiceImpl.java     |   8 +-
+ .../server/scheduler/store/HSQLStateStore.java     |  46 ++++
+ .../lens/server/scheduler/store/SchedulerDAO.java  | 245 +++++++++++++++++++++
+ .../lens/server/scheduler/store/StateStore.java    |  41 ++++
+ 5 files changed, 340 insertions(+), 2 deletions(-)
+ create mode 100644 lens-server/src/main/java/org/apache/lens/server/scheduler/store/HSQLStateStore.java
+ create mode 100644 lens-server/src/main/java/org/apache/lens/server/scheduler/store/SchedulerDAO.java
+ create mode 100644 lens-server/src/main/java/org/apache/lens/server/scheduler/store/StateStore.java
+
+diff --git a/lens-server/src/main/java/org/apache/lens/server/scheduler/ScheduleResource.java b/lens-server/src/main/java/org/apache/lens/server/scheduler/ScheduleResource.java
+index fa68f94..ec19a96 100644
+--- a/lens-server/src/main/java/org/apache/lens/server/scheduler/ScheduleResource.java
++++ b/lens-server/src/main/java/org/apache/lens/server/scheduler/ScheduleResource.java
+@@ -47,7 +47,7 @@ import org.apache.lens.server.api.scheduler.SchedulerJobStats;
+ import org.apache.lens.server.api.scheduler.SchedulerService;
+ 
+ /**
+- * The Class ScheduleResource.
++ * REST end point for all scheduler operations.
+  */
+ @Path("scheduler")
+ public class ScheduleResource {
+diff --git a/lens-server/src/main/java/org/apache/lens/server/scheduler/SchedulerServiceImpl.java b/lens-server/src/main/java/org/apache/lens/server/scheduler/SchedulerServiceImpl.java
+index f9c3273..aa5fb83 100644
+--- a/lens-server/src/main/java/org/apache/lens/server/scheduler/SchedulerServiceImpl.java
++++ b/lens-server/src/main/java/org/apache/lens/server/scheduler/SchedulerServiceImpl.java
+@@ -36,10 +36,12 @@ import org.apache.lens.server.api.scheduler.SchedulerService;
+ 
+ import org.apache.hive.service.cli.CLIService;
+ /**
+- * The Class QuerySchedulerService.
++ * This class handles all the scheduler operations.
+  */
+ public class SchedulerServiceImpl extends BaseLensService implements SchedulerService {
+ 
++  // get the state store
++
+   /**
+    * The constant name for scheduler service.
+    */
+@@ -54,6 +56,7 @@ public class SchedulerServiceImpl extends BaseLensService implements SchedulerSe
+     super(NAME, cliService);
+   }
+ 
++
+   /**
+    * {@inheritDoc}
+    */
+@@ -70,6 +73,9 @@ public class SchedulerServiceImpl extends BaseLensService implements SchedulerSe
+   @Override
+   public SchedulerJobHandle submitJob(LensSessionHandle sessionHandle, XJob job) throws LensException {
+     // take a job, validate it, submit it to scheduler (check that there are no duplicates, will persist it)
++    // what validations to run on a job apart from the xsd validations??
++    // how to check for duplicates?? Can't same query be scheduled by two different people??
++    //
+     return null;
+   }
+ 
+diff --git a/lens-server/src/main/java/org/apache/lens/server/scheduler/store/HSQLStateStore.java b/lens-server/src/main/java/org/apache/lens/server/scheduler/store/HSQLStateStore.java
+new file mode 100644
+index 0000000..213aba8
+--- /dev/null
++++ b/lens-server/src/main/java/org/apache/lens/server/scheduler/store/HSQLStateStore.java
+@@ -0,0 +1,46 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ * <p/>
++ * http://www.apache.org/licenses/LICENSE-2.0
++ * <p/>
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package org.apache.lens.server.scheduler.store;
++
++import org.apache.lens.api.scheduler.XJob;
++
++/**
++ * HSQL implementation of the state store. This is primarily intended for development and testing purposes.
++ */
++public class HSQLStateStore implements StateStore {
++
++  @Override
++  public void initStore() {
++    createJobTableIfNotExists();
++    createJobInstanceTableIfNotExists();
++  }
++
++  private void createJobInstanceTableIfNotExists() {
++
++  }
++
++  private void createJobTableIfNotExists() {
++  }
++
++
++  @Override
++  public int saveJob(XJob job) {
++    return 0;
++  }
++}
+diff --git a/lens-server/src/main/java/org/apache/lens/server/scheduler/store/SchedulerDAO.java b/lens-server/src/main/java/org/apache/lens/server/scheduler/store/SchedulerDAO.java
+new file mode 100644
+index 0000000..256a7cb
+--- /dev/null
++++ b/lens-server/src/main/java/org/apache/lens/server/scheduler/store/SchedulerDAO.java
+@@ -0,0 +1,245 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ * <p/>
++ * http://www.apache.org/licenses/LICENSE-2.0
++ * <p/>
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package org.apache.lens.server.scheduler.store;
++import lombok.extern.slf4j.Slf4j;
++
++
++import lombok.extern.slf4j.Slf4j;
++import org.apache.commons.dbutils.DbUtils;
++import org.apache.commons.dbutils.QueryRunner;
++import org.apache.commons.dbutils.ResultSetHandler;
++import org.apache.commons.dbutils.handlers.BeanHandler;
++import org.apache.commons.lang3.StringUtils;
++import org.apache.hadoop.conf.Configuration;
++import org.apache.lens.api.query.QueryHandle;
++import org.apache.lens.server.api.error.LensException;
++import org.apache.lens.server.api.query.FinishedLensQuery;
++import org.apache.lens.server.util.UtilityMethods;
++
++import javax.sql.DataSource;
++import java.sql.Connection;
++import java.sql.ResultSet;
++import java.sql.SQLException;
++import java.util.ArrayList;
++import java.util.List;
++
++/**
++ * Top level class which logs and retrieves jobs and instances from Database.
++ */
++@Slf4j
++public class SchedulerDAO {
++
++  /** The datasource. */
++  private DataSource ds;
++
++  /**
++   * Initialize  the DAO by reading configuration.
++   * @param conf the conf
++   */
++  public void init(Configuration conf) {
++    ds = UtilityMethods.getDataSourceFromConf(conf);
++  }
++
++  public Connection getConnection() throws SQLException {
++    return ds.getConnection();
++  }
++
++  /**
++   * Drop scheduler jobs table.
++   */
++  public void dropSchedulerJobsTable() {
++    QueryRunner runner = new QueryRunner(ds);
++    try {
++      runner.update("drop table scheduler_jobs");
++    } catch (SQLException e) {
++      log.error("SQL exception while dropping scheduler_jobs table.", e);
++    }
++  }
++
++  /**
++   * Drop scheduler jobs table.
++   */
++  public void dropSchedulerJobInstancesTable() {
++    QueryRunner runner = new QueryRunner(ds);
++    try {
++      runner.update("drop table scheduler_job_instances");
++    } catch (SQLException e) {
++      log.error("SQL exception while dropping scheduler_job_instances table.", e);
++    }
++  }
++
++
++  /**
++   * Method to create "scheduler_jobs" table, this is required for embedded lens server. For production server we will
++   * not be creating tables as it would be created upfront.
++   *
++   * @throws Exception SQLException encountered if creation of the table fails.
++   */
++  public void createSchedulerJobsTable() throws Exception {
++    String sql = "CREATE TABLE if not exists scheduler_jobs (handle varchar(255) not null unique,"
++        + "userquery varchar(10000) not null," + "submitter varchar(255) not null," + "starttime bigint, "
++        + "endtime bigint," + "result varchar(255)," + "status varchar(255), " + "metadata varchar(100000), "
++        + "rows int, " + "filesize bigint, " + "errormessage varchar(10000), " + "driverstarttime bigint, "
++        + "driverendtime bigint, " + "drivername varchar(10000), "
++        + "queryname varchar(255), " + "submissiontime bigint" + ")";
++    try {
++      QueryRunner runner = new QueryRunner(ds);
++      runner.update(sql);
++      log.info("Created scheduler_jobs table");
++    } catch (SQLException e) {
++      log.warn("Unable to create scheduler_jobs table", e);
++    }
++  }
++
++  /**
++   * DAO method to insert a new Finished query into Table.
++   *
++   * @param query to be inserted
++   * @throws SQLException the exception
++   */
++  public void insertRowInSchedulerJobs(FinishedLensQuery query) throws SQLException {
++    FinishedLensQuery alreadyExisting = getQuery(query.getHandle());
++    if (alreadyExisting == null) {
++      // The expected case
++      Connection conn = null;
++      String sql = "insert into scheduler_jobs (handle, userquery,submitter,"
++          + "starttime,endtime,result,status,metadata,rows,filesize,"
++          + "errormessage,driverstarttime,driverendtime, drivername, queryname, submissiontime)"
++          + " values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
++      try {
++        conn = getConnection();
++        QueryRunner runner = new QueryRunner();
++        runner.update(conn, sql, query.getHandle(), query.getUserQuery(), query.getSubmitter(), query.getStartTime(),
++            query.getEndTime(), query.getResult(), query.getStatus(), query.getMetadata(), query.getRows(),
++            query.getErrorMessage(), query.getDriverStartTime(), query.getDriverEndTime(), query.getFileSize(),
++            query.getDriverName(), query.getQueryName(), query.getSubmissionTime());
++        conn.commit();
++      } finally {
++        DbUtils.closeQuietly(conn);
++      }
++    } else {
++      log.warn("Re insert happening in purge: " + Thread.currentThread().getStackTrace());
++      if (alreadyExisting.equals(query)) {
++        // This is also okay
++        log.warn("Skipping Re-insert. Finished Query found in DB while trying to insert, handle=" + query.getHandle());
++      } else {
++        String msg = "Found different value pre-existing in DB while trying to insert finished query. "
++            + "Old = " + alreadyExisting + "\nNew = " + query;
++        throw new SQLException(msg);
++      }
++    }
++  }
++
++  /**
++   * Fetch Finished query from Database.
++   *
++   * @param handle to be fetched
++   * @return Finished query.
++   */
++  public FinishedLensQuery getQuery(String handle) {
++    ResultSetHandler<FinishedLensQuery> rsh = new BeanHandler<FinishedLensQuery>(FinishedLensQuery.class);
++    String sql = "select * from finished_queries where handle=?";
++    QueryRunner runner = new QueryRunner(ds);
++    try {
++      return runner.query(sql, rsh, handle);
++    } catch (SQLException e) {
++      log.error("SQL exception while executing query.", e);
++    }
++    return null;
++  }
++
++  /**
++   * Find finished queries.
++   *
++   * @param state     the state
++   * @param user      the user
++   * @param driverName the driver's fully qualified Name
++   * @param queryName the query name
++   * @param fromDate  the from date
++   * @param toDate    the to date
++   * @return the list
++   * @throws LensException the lens exception
++   */
++  public List<QueryHandle> findJobs(String state, String user, String driverName, String queryName,
++                                               long fromDate, long toDate) throws LensException {
++    boolean addFilter = StringUtils.isNotBlank(state) || StringUtils.isNotBlank(user)
++        || StringUtils.isNotBlank(queryName);
++    StringBuilder builder = new StringBuilder("SELECT handle FROM finished_queries");
++    List<Object> params = null;
++    if (addFilter) {
++      builder.append(" WHERE ");
++      List<String> filters = new ArrayList<String>(3);
++      params = new ArrayList<Object>(3);
++
++      if (StringUtils.isNotBlank(state)) {
++        filters.add("status=?");
++        params.add(state);
++      }
++
++      if (StringUtils.isNotBlank(user)) {
++        filters.add("submitter=?");
++        params.add(user);
++      }
++
++      if (StringUtils.isNotBlank(queryName)) {
++        filters.add("queryname like ?");
++        params.add("%" + queryName + "%");
++      }
++
++      if (StringUtils.isNotBlank(driverName)) {
++        filters.add("lower(drivername)=?");
++        params.add(driverName.toLowerCase());
++      }
++
++      filters.add("submissiontime BETWEEN ? AND ?");
++      params.add(fromDate);
++      params.add(toDate);
++      builder.append(StringUtils.join(filters, " AND "));
++    }
++
++    ResultSetHandler<List<QueryHandle>> resultSetHandler = new ResultSetHandler<List<QueryHandle>>() {
++      @Override
++      public List<QueryHandle> handle(ResultSet resultSet) throws SQLException {
++        List<QueryHandle> queryHandleList = new ArrayList<QueryHandle>();
++        while (resultSet.next()) {
++          String handle = resultSet.getString(1);
++          try {
++            queryHandleList.add(QueryHandle.fromString(handle));
++          } catch (IllegalArgumentException exc) {
++            log.warn("Warning invalid query handle found in DB " + handle);
++          }
++        }
++        return queryHandleList;
++      }
++    };
++
++    QueryRunner runner = new QueryRunner(ds);
++    String query = builder.toString();
++    try {
++      if (addFilter) {
++        return runner.query(query, resultSetHandler, params.toArray());
++      } else {
++        return runner.query(query, resultSetHandler);
++      }
++    } catch (SQLException e) {
++      throw new LensException(e);
++    }
++  }
++
++}
+diff --git a/lens-server/src/main/java/org/apache/lens/server/scheduler/store/StateStore.java b/lens-server/src/main/java/org/apache/lens/server/scheduler/store/StateStore.java
+new file mode 100644
+index 0000000..ade97a7
+--- /dev/null
++++ b/lens-server/src/main/java/org/apache/lens/server/scheduler/store/StateStore.java
+@@ -0,0 +1,41 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ * <p/>
++ * http://www.apache.org/licenses/LICENSE-2.0
++ * <p/>
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package org.apache.lens.server.scheduler.store;
++
++import org.apache.lens.api.scheduler.XJob;
++
++/**
++ * Interface for all persistence and retrieval related operations for scheduler.
++ */
++public interface StateStore {
++
++  /**
++   * Initialize the stateStore. If the job and instance tables are not created then it creates the tables.
++   */
++  void initStore();
++
++  // store a job
++  int saveJob(XJob job);
++
++  // delete a job
++
++  // store an instance
++
++  // all job related operations and all instance related operations, through a dao?
++}
+-- 
+1.9.1
+
