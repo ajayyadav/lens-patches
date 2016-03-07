@@ -1,8 +1,8 @@
-commit 9dd3dafd3d3f012b6b94bb5cb2bf452c7aaa5352
+commit 7a9f5edd997030690da799a05743cd5520a4c482
 Author: Ajay Yadava <ajaynsit@gmail.com>
-Date:   Tue Mar 1 23:49:54 2016 +0530
+Date:   Mon Mar 7 20:52:39 2016 +0530
 
-    little more progress on the scheduler.
+    Scheduler more progress, do soft revert to proceed.
 
 diff --git a/lens-api/src/main/java/org/apache/lens/api/query/SchedulerJobInfo.java b/lens-api/src/main/java/org/apache/lens/api/query/SchedulerJobInfo.java
 index 92260b5..b0c44be 100644
@@ -801,7 +801,7 @@ index abc4621..ec19a96 100644
    }
  }
 diff --git a/lens-server/src/main/java/org/apache/lens/server/scheduler/SchedulerServiceImpl.java b/lens-server/src/main/java/org/apache/lens/server/scheduler/SchedulerServiceImpl.java
-index ce98601..1f50369 100644
+index ce98601..9863675 100644
 --- a/lens-server/src/main/java/org/apache/lens/server/scheduler/SchedulerServiceImpl.java
 +++ b/lens-server/src/main/java/org/apache/lens/server/scheduler/SchedulerServiceImpl.java
 @@ -21,7 +21,9 @@ package org.apache.lens.server.scheduler;
@@ -894,19 +894,18 @@ index ce98601..1f50369 100644
    }
  
    /**
-@@ -90,7 +127,10 @@ public class SchedulerServiceImpl extends BaseLensService implements SchedulerSe
+@@ -90,7 +127,9 @@ public class SchedulerServiceImpl extends BaseLensService implements SchedulerSe
     */
    @Override
    public XJob getJobDefinition(LensSessionHandle sessionHandle, SchedulerJobHandle jobHandle) throws LensException {
 -    return null;
 +    // get the job definition from the persisted store, return it.
 +    UUID externalID = jobHandle.getHandleId();
-+    XJob job = schedulerDAO.getJob(externalID);
-+    return job;
++    return schedulerDAO.getJob(externalID);
    }
  
    /**
-@@ -99,6 +139,8 @@ public class SchedulerServiceImpl extends BaseLensService implements SchedulerSe
+@@ -99,6 +138,8 @@ public class SchedulerServiceImpl extends BaseLensService implements SchedulerSe
    @Override
    public SchedulerJobInfo getJobDetails(LensSessionHandle sessionHandle,
                                          SchedulerJobHandle jobHandle) throws LensException {
@@ -915,7 +914,7 @@ index ce98601..1f50369 100644
      return null;
    }
  
-@@ -108,15 +150,34 @@ public class SchedulerServiceImpl extends BaseLensService implements SchedulerSe
+@@ -108,33 +149,38 @@ public class SchedulerServiceImpl extends BaseLensService implements SchedulerSe
    @Override
    public boolean updateJob(LensSessionHandle sessionHandle, SchedulerJobHandle jobHandle,
                             XJob newJobDefinition) throws LensException {
@@ -929,49 +928,46 @@ index ce98601..1f50369 100644
 +    // update the notification services as well as stuff like end date, frequency etc. might have been updated.
 +    UUID externalID = jobHandle.getHandleId();
 +    // validate that the jobHandle is a valid one
-+    XJob job = schedulerDAO.getJob(externalID);
++    schedulerDAO.getJob(externalID);
 +    schedulerDAO.updateJob(externalID, newJobDefinition);
      return false;
    }
  
-   /**
-+   *
-    * {@inheritDoc}
-    */
+-  /**
+-   * {@inheritDoc}
+-   */
    @Override
 -  public void expireJob(LensSessionHandle sessionHandle, SchedulerJobHandle jobHandle,
 -                        Date expiryTime) throws LensException {
+-
 +  public void expireJob(LensSessionHandle sessionHandle, SchedulerJobHandle jobHandle) throws LensException {
-+    // expire job means put the status to expired, unsubscribe from all notification services, no more instances
-+    // how to convey the signal to the scheduler, should it be passed to the scheduler itself and let scheduler
-+    // manage the state transition and the state store update as well?
-+    // can an expire job be run/resumed again? - no
-+    // difference between delete and expire is that in expire, history is retained as is in completed.
-+    schedulerDAO.expireJob(jobHandle);
-+
- 
++    // to be done in second phase
++    throw new UnsupportedOperationException("This operation is currently not supported.");
    }
  
-@@ -125,6 +186,8 @@ public class SchedulerServiceImpl extends BaseLensService implements SchedulerSe
-    */
+-  /**
+-   * {@inheritDoc}
+-   */
    @Override
    public boolean suspendJob(LensSessionHandle sessionHandle, SchedulerJobHandle jobHandle) throws LensException {
-+    // update the status of the job to be suspended, unsubscribe from all the notifications for that job
-+    // store the date of suspend ?? (so that it can be resumed from that time??)
-     return false;
+-    return false;
++    // to be done in second phase
++    throw new UnsupportedOperationException("This operation is currently not supported.");
    }
  
-@@ -134,6 +197,9 @@ public class SchedulerServiceImpl extends BaseLensService implements SchedulerSe
+-  /**
+-   * {@inheritDoc}
+-   */
    @Override
    public boolean resumeJob(LensSessionHandle sessionHandle, SchedulerJobHandle jobHandle,
                             Date effectiveTime) throws LensException {
-+    // resume the job, from the time it was suspended, subscribe to all the notification services
-+    // how to ensure that in back date cases as soon as you subscribe to one service there is no incorrect behavior
-+    // in the sense that only one service is subscribed so far and that sends the triggers.
-     return false;
+-    return false;
++    // to be done in second phase
++    throw new UnsupportedOperationException("This operation is currently not supported.");
    }
  
-@@ -142,6 +208,10 @@ public class SchedulerServiceImpl extends BaseLensService implements SchedulerSe
+   /**
+@@ -142,6 +188,10 @@ public class SchedulerServiceImpl extends BaseLensService implements SchedulerSe
     */
    @Override
    public boolean deleteJob(LensSessionHandle sessionHandle, SchedulerJobHandle jobHandle) throws LensException {
@@ -982,7 +978,7 @@ index ce98601..1f50369 100644
      return false;
    }
  
-@@ -149,9 +219,22 @@ public class SchedulerServiceImpl extends BaseLensService implements SchedulerSe
+@@ -149,9 +199,22 @@ public class SchedulerServiceImpl extends BaseLensService implements SchedulerSe
     * {@inheritDoc}
     */
    @Override
@@ -1008,25 +1004,25 @@ index ce98601..1f50369 100644
    }
  
    /**
-@@ -160,7 +243,8 @@ public class SchedulerServiceImpl extends BaseLensService implements SchedulerSe
+@@ -160,30 +223,33 @@ public class SchedulerServiceImpl extends BaseLensService implements SchedulerSe
    @Override
    public SchedulerJobStats getJobStats(LensSessionHandle sessionHandle, SchedulerJobHandle handle, String state,
                                long startTime, long endTime) throws LensException {
 -    return null;
+-  }
+-
+-  /**
+-   * {@inheritDoc}
+-   */
+-  @Override
+-  public boolean rerunInstance(LensSessionHandle sessionHandle,
+-                               SchedulerJobInstanceHandle instanceHandle) throws LensException {
+-    return false;
 +    // validate that the state is a valid state (enum)
 +    return schedulerDAO.getJobStats(handle, state, startTime, endTime);
    }
  
    /**
-@@ -169,6 +253,7 @@ public class SchedulerServiceImpl extends BaseLensService implements SchedulerSe
-   @Override
-   public boolean rerunInstance(LensSessionHandle sessionHandle,
-                                SchedulerJobInstanceHandle instanceHandle) throws LensException {
-+    // todo how will rerunning work with queries containing like now??
-     return false;
-   }
- 
-@@ -176,15 +261,20 @@ public class SchedulerServiceImpl extends BaseLensService implements SchedulerSe
     * {@inheritDoc}
     */
    @Override
@@ -1041,16 +1037,20 @@ index ce98601..1f50369 100644
    @Override
    public boolean killInstance(LensSessionHandle sessionHandle,
                                SchedulerJobInstanceHandle instanceHandle) throws LensException {
--    return false;
 +    // it needs to be sent to the scheduler so that it can cancel
-+    // todo how to handle the completion notifications for the queries which have been deleted ? 
++    // todo how to handle the completion notifications for the queries which have been deleted ?
 +    UUID externalID = instanceHandle.getHandleId();
 +    schedulerDAO.killInstance(externalID);
 +    return true;
++  }
++
++  @Override
++  public boolean rerunInstance(LensSessionHandle sessionHandle,
++                               SchedulerJobInstanceHandle instanceHandle) throws LensException {
+     return false;
    }
  
- 
-@@ -194,6 +284,7 @@ public class SchedulerServiceImpl extends BaseLensService implements SchedulerSe
+@@ -194,6 +260,7 @@ public class SchedulerServiceImpl extends BaseLensService implements SchedulerSe
    @Override
    public SchedulerJobInstanceInfo getInstanceDetails(LensSessionHandle sessionHandle,
                                                       SchedulerJobInstanceHandle instanceHandle) throws LensException {
@@ -1144,58 +1144,6 @@ index 0000000..9bef064
 + */
 +public class DataAvailabilityService {
 +
-+}
-diff --git a/lens-server/src/main/java/org/apache/lens/server/scheduler/store/HSQLStateStore.java b/lens-server/src/main/java/org/apache/lens/server/scheduler/store/HSQLStateStore.java
-new file mode 100644
-index 0000000..213aba8
---- /dev/null
-+++ b/lens-server/src/main/java/org/apache/lens/server/scheduler/store/HSQLStateStore.java
-@@ -0,0 +1,46 @@
-+/**
-+ * Licensed to the Apache Software Foundation (ASF) under one
-+ * or more contributor license agreements.  See the NOTICE file
-+ * distributed with this work for additional information
-+ * regarding copyright ownership.  The ASF licenses this file
-+ * to you under the Apache License, Version 2.0 (the
-+ * "License"); you may not use this file except in compliance
-+ * with the License.  You may obtain a copy of the License at
-+ * <p/>
-+ * http://www.apache.org/licenses/LICENSE-2.0
-+ * <p/>
-+ * Unless required by applicable law or agreed to in writing, software
-+ * distributed under the License is distributed on an "AS IS" BASIS,
-+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-+ * See the License for the specific language governing permissions and
-+ * limitations under the License.
-+ */
-+
-+package org.apache.lens.server.scheduler.store;
-+
-+import org.apache.lens.api.scheduler.XJob;
-+
-+/**
-+ * HSQL implementation of the state store. This is primarily intended for development and testing purposes.
-+ */
-+public class HSQLStateStore implements StateStore {
-+
-+  @Override
-+  public void initStore() {
-+    createJobTableIfNotExists();
-+    createJobInstanceTableIfNotExists();
-+  }
-+
-+  private void createJobInstanceTableIfNotExists() {
-+
-+  }
-+
-+  private void createJobTableIfNotExists() {
-+  }
-+
-+
-+  @Override
-+  public int saveJob(XJob job) {
-+    return 0;
-+  }
 +}
 diff --git a/lens-server/src/main/java/org/apache/lens/server/scheduler/store/SchedulerDAO.java b/lens-server/src/main/java/org/apache/lens/server/scheduler/store/SchedulerDAO.java
 new file mode 100644
@@ -1374,51 +1322,4 @@ index 0000000..cbce082
 +  public void deleteJob(UUID externalID) {
 +    // todo mark the status as deleted? or add a new column to indicate that is_deleted is true.??
 +  }
-+}
-diff --git a/lens-server/src/main/java/org/apache/lens/server/scheduler/store/StateStore.java b/lens-server/src/main/java/org/apache/lens/server/scheduler/store/StateStore.java
-new file mode 100644
-index 0000000..ade97a7
---- /dev/null
-+++ b/lens-server/src/main/java/org/apache/lens/server/scheduler/store/StateStore.java
-@@ -0,0 +1,41 @@
-+/**
-+ * Licensed to the Apache Software Foundation (ASF) under one
-+ * or more contributor license agreements.  See the NOTICE file
-+ * distributed with this work for additional information
-+ * regarding copyright ownership.  The ASF licenses this file
-+ * to you under the Apache License, Version 2.0 (the
-+ * "License"); you may not use this file except in compliance
-+ * with the License.  You may obtain a copy of the License at
-+ * <p/>
-+ * http://www.apache.org/licenses/LICENSE-2.0
-+ * <p/>
-+ * Unless required by applicable law or agreed to in writing, software
-+ * distributed under the License is distributed on an "AS IS" BASIS,
-+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-+ * See the License for the specific language governing permissions and
-+ * limitations under the License.
-+ */
-+
-+package org.apache.lens.server.scheduler.store;
-+
-+import org.apache.lens.api.scheduler.XJob;
-+
-+/**
-+ * Interface for all persistence and retrieval related operations for scheduler.
-+ */
-+public interface StateStore {
-+
-+  /**
-+   * Initialize the stateStore. If the job and instance tables are not created then it creates the tables.
-+   */
-+  void initStore();
-+
-+  // store a job
-+  int saveJob(XJob job);
-+
-+  // delete a job
-+
-+  // store an instance
-+
-+  // all job related operations and all instance related operations, through a dao?
 +}
