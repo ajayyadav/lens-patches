@@ -1,0 +1,15 @@
+diff --git a/lens-server/src/main/java/org/apache/lens/server/util/FairPriorityBlockingQueue.java b/lens-server/src/main/java/org/apache/lens/server/util/FairPriorityBlockingQueue.java
+index b2ebf5b..777223e 100644
+--- a/lens-server/src/main/java/org/apache/lens/server/util/FairPriorityBlockingQueue.java
++++ b/lens-server/src/main/java/org/apache/lens/server/util/FairPriorityBlockingQueue.java
+@@ -99,7 +99,9 @@ public class FairPriorityBlockingQueue<E> {
+ 
+     conditionalWaitLock.lock();
+     try {
+-      notEmpty.await();
++      while (priorityBlockingQueue.size() < 1) {
++        notEmpty.await();
++      }
+     } finally {
+       conditionalWaitLock.unlock();
+     }
