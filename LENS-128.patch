@@ -1,8 +1,8 @@
-commit 7a9f5edd997030690da799a05743cd5520a4c482
+commit b9d2368d7a1f00df1c5f3ebf9c9cd175ed347aa3
 Author: Ajay Yadava <ajaynsit@gmail.com>
-Date:   Mon Mar 7 20:52:39 2016 +0530
+Date:   Mon Mar 14 00:37:56 2016 +0530
 
-    Scheduler more progress, do soft revert to proceed.
+    LENS-128 more progress on Alarm Service.
 
 diff --git a/lens-api/src/main/java/org/apache/lens/api/query/SchedulerJobInfo.java b/lens-api/src/main/java/org/apache/lens/api/query/SchedulerJobInfo.java
 index 92260b5..b0c44be 100644
@@ -19,6 +19,115 @@ index 92260b5..b0c44be 100644
 -  private long modifiedOn;
 -
  }
+diff --git a/lens-api/src/main/java/org/apache/lens/api/query/SchedulerJobInstanceHandle.java b/lens-api/src/main/java/org/apache/lens/api/query/SchedulerJobInstanceHandle.java
+index f19d3f0..52467de 100644
+--- a/lens-api/src/main/java/org/apache/lens/api/query/SchedulerJobInstanceHandle.java
++++ b/lens-api/src/main/java/org/apache/lens/api/query/SchedulerJobInstanceHandle.java
+@@ -18,22 +18,14 @@
+ 
+ package org.apache.lens.api.query;
+ 
+-import java.io.Serializable;
+-import java.util.UUID;
++import lombok.*;
++import org.apache.lens.api.UUIDAdapter;
+ 
+ import javax.xml.bind.annotation.XmlElement;
+ import javax.xml.bind.annotation.XmlRootElement;
+ import javax.xml.bind.annotation.adapters.XmlJavaTypeAdapter;
+-
+-import org.apache.lens.api.UUIDAdapter;
+-
+-import org.apache.commons.lang.StringUtils;
+-
+-import lombok.AccessLevel;
+-import lombok.AllArgsConstructor;
+-import lombok.EqualsAndHashCode;
+-import lombok.Getter;
+-import lombok.NoArgsConstructor;
++import java.io.Serializable;
++import java.util.UUID;
+ 
+ /**
+  * Handle for <code>SchedulerJobInstance</code>
+@@ -72,9 +64,6 @@ public class SchedulerJobInstanceHandle implements Serializable {
+    * @return handleId as a string.
+    */
+   public String getHandleIdString() {
+-    if (handleId == null) {
+-      return StringUtils.EMPTY;
+-    }
+     return handleId.toString();
+   }
+ 
+diff --git a/lens-server-api/pom.xml b/lens-server-api/pom.xml
+index 8304279..273106f 100644
+--- a/lens-server-api/pom.xml
++++ b/lens-server-api/pom.xml
+@@ -93,5 +93,9 @@
+       <groupId>org.slf4j</groupId>
+       <artifactId>jcl-over-slf4j</artifactId>
+     </dependency>
++    <dependency>
++      <groupId>joda-time</groupId>
++      <artifactId>joda-time</artifactId>
++    </dependency>
+   </dependencies>
+ </project>
+diff --git a/lens-server-api/src/main/java/org/apache/lens/server/api/events/SchedulerAlarmEvent.java b/lens-server-api/src/main/java/org/apache/lens/server/api/events/SchedulerAlarmEvent.java
+new file mode 100644
+index 0000000..4c3b132
+--- /dev/null
++++ b/lens-server-api/src/main/java/org/apache/lens/server/api/events/SchedulerAlarmEvent.java
+@@ -0,0 +1,48 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ * <p/>
++ * http://www.apache.org/licenses/LICENSE-2.0
++ * <p/>
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package org.apache.lens.server.api.events;
++
++import org.apache.lens.api.query.SchedulerJobHandle;
++import org.apache.lens.api.query.SchedulerJobInstanceHandle;
++import org.joda.time.DateTime;
++
++/**
++ * This event is triggered by the AlarmService whenever a scheduled query needs to be scheduled.
++ */
++public class SchedulerAlarmEvent extends LensEvent {
++
++  /**
++   * jobHandle for which the alarm needs to be triggered.
++   */
++  private SchedulerJobHandle jobHandle;
++
++  private DateTime nominalTime;
++
++  public SchedulerAlarmEvent(SchedulerJobHandle jobHandle, DateTime nominalTime) {
++    super(nominalTime.getMillis());
++    this.jobHandle = jobHandle;
++    this.nominalTime = nominalTime;
++  }
++
++  @Override
++  public String getEventId() {
++    return jobHandle.getHandleIdString();
++  }
++
++}
 diff --git a/lens-server-api/src/main/java/org/apache/lens/server/api/scheduler/SchedulerService.java b/lens-server-api/src/main/java/org/apache/lens/server/api/scheduler/SchedulerService.java
 index b6ec093..38f8882 100644
 --- a/lens-server-api/src/main/java/org/apache/lens/server/api/scheduler/SchedulerService.java
@@ -77,6 +186,22 @@ index b6ec093..38f8882 100644
                                 SchedulerJobHandle jobHandle, Long numResults) throws LensException;
  
    /**
+diff --git a/lens-server/pom.xml b/lens-server/pom.xml
+index 75b8b32..f8bba1f 100644
+--- a/lens-server/pom.xml
++++ b/lens-server/pom.xml
+@@ -230,6 +230,11 @@
+       <artifactId>guava</artifactId>
+     </dependency>
+     <dependency>
++      <groupId>org.quartz-scheduler</groupId>
++      <artifactId>quartz</artifactId>
++      <version>${quartz.version}</version>
++    </dependency>
++    <dependency>
+       <groupId>org.apache.lens</groupId>
+       <artifactId>lens-server-api</artifactId>
+       <type>test-jar</type>
 diff --git a/lens-server/src/main/java/org/apache/lens/server/scheduler/InstanceState.java b/lens-server/src/main/java/org/apache/lens/server/scheduler/InstanceState.java
 new file mode 100644
 index 0000000..85bc265
@@ -1084,10 +1209,10 @@ index 0000000..54ab6a3
 +}
 diff --git a/lens-server/src/main/java/org/apache/lens/server/scheduler/notification/services/AlarmService.java b/lens-server/src/main/java/org/apache/lens/server/scheduler/notification/services/AlarmService.java
 new file mode 100644
-index 0000000..afbcdd3
+index 0000000..9f16a29
 --- /dev/null
 +++ b/lens-server/src/main/java/org/apache/lens/server/scheduler/notification/services/AlarmService.java
-@@ -0,0 +1,25 @@
+@@ -0,0 +1,127 @@
 +/**
 + * Licensed to the Apache Software Foundation (ASF) under one
 + * or more contributor license agreements.  See the NOTICE file
@@ -1108,10 +1233,112 @@ index 0000000..afbcdd3
 +
 +package org.apache.lens.server.scheduler.notification.services;
 +
++import lombok.extern.slf4j.Slf4j;
++import org.apache.hive.com.esotericsoftware.minlog.Log;
++import org.apache.hive.service.cli.CLIService;
++import org.apache.lens.api.query.SchedulerJobHandle;
++import org.apache.lens.api.scheduler.XFrequency;
++import org.apache.lens.api.scheduler.XFrequencyEnum;
++import org.apache.lens.server.BaseLensService;
++import org.apache.lens.server.api.error.LensException;
++import org.apache.lens.server.api.events.LensEventService;
++import org.apache.lens.server.api.events.SchedulerAlarmEvent;
++import org.apache.lens.server.api.health.HealthStatus;
++import org.joda.time.DateTime;
++import org.quartz.*;
++
++import java.util.TimeZone;
++
 +/**
++ * This service is used primarily by {@link org.apache.lens.server.scheduler.LensScheduler} to get alarm notifications
++ * for scheduled queries.
 + *
++ * As a schedule this service accepts start time, frequency, end time and timeZone. It also requires the
++ * {@link org.apache.lens.api.query.SchedulerJobHandle} which it sends as part of the
++ * {@link org.apache.lens.server.api.events.SchedulerAlarmEvent} to inform the scheduler about the job for which
++ * job the notification has been generated.
 + */
-+public class AlarmService {
++@Slf4j
++public class AlarmService extends BaseLensService {
++
++  /**
++   * Creates a new instance of AlarmService.
++   *
++   * @param name       the name
++   * @param cliService the cli service
++   */
++  protected AlarmService(String name, CLIService cliService) {
++    super(name, cliService);
++  }
++
++  @Override
++  public HealthStatus getHealthStatus() {
++    return null;
++  }
++
++
++  public void schedule(DateTime start, DateTime end, XFrequency frequency, TimeZone tz, SchedulerJobHandle jobHandle) {
++    // accept the schedule and then keep on sending the notifications for that schedule
++    DateTime currentTime = DateTime.now();
++    JobDataMap map = new JobDataMap();
++    map.put("nominalTime", currentTime.getMillis());
++    map.put("jobHandle", jobHandle.getHandleIdString());
++    JobDetail job = JobBuilder.newJob(LensJob.class).withIdentity("toBeFixed", "toBeFixed")
++        .usingJobData(map).build();
++
++      // TODO Handle past events.??
++//    // Schedule future events using Quartz
++
++    CalendarIntervalTrigger trigger = TriggerBuilder.newTrigger()
++        .withIdentity(jobHandle.getHandleIdString(), "LensScheduler")
++        .startAt(start.toDate())
++        .endAt(end.toDate())
++        .withSchedule(
++            CalendarIntervalScheduleBuilder.calendarIntervalSchedule()
++                .withInterval(frequency.getFrequencyAsInt(), getTimeUnit(request.getFrequency().getTimeUnit()))
++                .withMisfireHandlingInstructionFireAndProceed())
++        .build();
++
++    // define the job and tie it to our Job class
++    JobDetail job = JobBuilder.newJob(LensJob.class)
++        .withIdentity(getJobKey(notificationRequest.getCallbackId().toString()))
++        .setJobData(getJobDataMap((AlarmRequest) notificationRequest))
++        .build();
++
++    // Tell quartz to run the job using our trigger
++    try {
++      scheduler.scheduleJob(job, trigger);
++    } catch (SchedulerException e) {
++      log.error("Error scheduling entity {}", trigger.getKey());
++//      throw new Exception(e);
++    }
++  }
++
++  public void unSchedule(SchedulerJobHandle jobHandle) {
++    // stop sending notifications for this job handle
++  }
++
++  private class LensJob implements Job {
++
++    @Override
++    public void execute(JobExecutionContext jobExecutionContext) throws JobExecutionException {
++      JobDataMap data = jobExecutionContext.getMergedJobDataMap();
++      DateTime nominalTime = new DateTime(data.getLongValue("nominalTime"));
++      SchedulerJobHandle jobHandle = SchedulerJobHandle.fromString(data.getString("jobHandle"));
++      SchedulerAlarmEvent alarmEvent = new SchedulerAlarmEvent(jobHandle, nominalTime);
++      try {
++        getEventService().notifyEvent(alarmEvent);
++      } catch (LensException e) {
++        log.error("Failed to notify SchedulerAlarmEvent for jobHandle: {} and nominalTime: {}",
++            jobHandle.getHandleIdString(), nominalTime.toString(), e);
++        throw new JobExecutionException("Failed to notify alarmEvent", e);
++      }
++    }
++  }
++
++  public static void main(String[] args) {
++    // test by scheduling a job in past and see that
++  }
 +}
 diff --git a/lens-server/src/main/java/org/apache/lens/server/scheduler/notification/services/DataAvailabilityService.java b/lens-server/src/main/java/org/apache/lens/server/scheduler/notification/services/DataAvailabilityService.java
 new file mode 100644
@@ -1323,3 +1550,15 @@ index 0000000..cbce082
 +    // todo mark the status as deleted? or add a new column to indicate that is_deleted is true.??
 +  }
 +}
+diff --git a/pom.xml b/pom.xml
+index 06cae12..cd344a0 100644
+--- a/pom.xml
++++ b/pom.xml
+@@ -56,6 +56,7 @@
+     <commons.lang.version>2.4</commons.lang.version>
+     <commons.collections.version>3.2.1</commons.collections.version>
+     <joda.time.version>2.0</joda.time.version>
++    <quartz.version>2.2.2</quartz.version>
+     <guava.version>13.0.1</guava.version>
+     <lombok.version>1.16.6</lombok.version>
+     <lombok.maven.plugin.version>1.16.4.1</lombok.maven.plugin.version>
