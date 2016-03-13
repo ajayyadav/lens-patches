@@ -1,0 +1,34 @@
+diff --git a/lens-examples/src/main/java/org/apache/lens/examples/DatabaseUtil.java b/lens-examples/src/main/java/org/apache/lens/examples/DatabaseUtil.java
+index f81504e..b9cab90 100644
+--- a/lens-examples/src/main/java/org/apache/lens/examples/DatabaseUtil.java
++++ b/lens-examples/src/main/java/org/apache/lens/examples/DatabaseUtil.java
+@@ -50,15 +50,21 @@ public final class DatabaseUtil {
+ 
+     con.setAutoCommit(true);
+     Statement statement = con.createStatement();
+-
+-    InputStream file = DatabaseUtil.class.getClassLoader().getResourceAsStream("db-storage-schema.sql");
+-    BufferedReader reader = new BufferedReader(new InputStreamReader(file, "UTF-8"));
+-    String line;
+-    while ((line = reader.readLine()) != null) {
+-      if (line.trim().equals("") || line.startsWith("--")) {
+-        continue;
++    BufferedReader reader = null;
++    try {
++      InputStream file = DatabaseUtil.class.getClassLoader().getResourceAsStream("db-storage-schema.sql");
++      reader = new BufferedReader(new InputStreamReader(file, "UTF-8"));
++      String line;
++      while ((line = reader.readLine()) != null) {
++        if (line.trim().equals("") || line.startsWith("--")) {
++          continue;
++        }
++        statement.executeUpdate(line);
++      }
++    } finally {
++      if (reader != null) {
++        reader.close();
+       }
+-      statement.executeUpdate(line);
+     }
+     statement.execute("SHUTDOWN");
+     statement.close();
