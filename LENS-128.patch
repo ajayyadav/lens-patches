@@ -1,8 +1,34 @@
-commit b9d2368d7a1f00df1c5f3ebf9c9cd175ed347aa3
-Author: Ajay Yadava <ajaynsit@gmail.com>
-Date:   Mon Mar 14 00:37:56 2016 +0530
+From b9d2368d7a1f00df1c5f3ebf9c9cd175ed347aa3 Mon Sep 17 00:00:00 2001
+From: Ajay Yadava <ajaynsit@gmail.com>
+Date: Mon, 14 Mar 2016 00:37:56 +0530
+Subject: [PATCH 1/2] LENS-128 more progress on Alarm Service.
 
-    LENS-128 more progress on Alarm Service.
+---
+ .../apache/lens/api/query/SchedulerJobInfo.java    |   6 -
+ .../lens/api/query/SchedulerJobInstanceHandle.java |  19 +-
+ lens-server-api/pom.xml                            |   4 +
+ .../server/api/events/SchedulerAlarmEvent.java     |  48 ++++
+ .../server/api/scheduler/SchedulerService.java     |  16 +-
+ lens-server/pom.xml                                |   5 +
+ .../lens/server/scheduler/InstanceState.java       | 173 +++++++++++++
+ .../org/apache/lens/server/scheduler/JobState.java | 154 ++++++++++++
+ .../lens/server/scheduler/LensScheduler.java       |  89 +++++++
+ .../lens/server/scheduler/ScheduleResource.java    | 267 ++++++++++++++++++++-
+ .../server/scheduler/SchedulerServiceImpl.java     | 137 ++++++++---
+ .../apache/lens/server/scheduler/StateMachine.java |  18 ++
+ .../notification/services/AlarmService.java        | 127 ++++++++++
+ .../services/DataAvailabilityService.java          |  26 ++
+ .../lens/server/scheduler/store/SchedulerDAO.java  | 172 +++++++++++++
+ pom.xml                                            |   1 +
+ 16 files changed, 1194 insertions(+), 68 deletions(-)
+ create mode 100644 lens-server-api/src/main/java/org/apache/lens/server/api/events/SchedulerAlarmEvent.java
+ create mode 100644 lens-server/src/main/java/org/apache/lens/server/scheduler/InstanceState.java
+ create mode 100644 lens-server/src/main/java/org/apache/lens/server/scheduler/JobState.java
+ create mode 100644 lens-server/src/main/java/org/apache/lens/server/scheduler/LensScheduler.java
+ create mode 100644 lens-server/src/main/java/org/apache/lens/server/scheduler/StateMachine.java
+ create mode 100644 lens-server/src/main/java/org/apache/lens/server/scheduler/notification/services/AlarmService.java
+ create mode 100644 lens-server/src/main/java/org/apache/lens/server/scheduler/notification/services/DataAvailabilityService.java
+ create mode 100644 lens-server/src/main/java/org/apache/lens/server/scheduler/store/SchedulerDAO.java
 
 diff --git a/lens-api/src/main/java/org/apache/lens/api/query/SchedulerJobInfo.java b/lens-api/src/main/java/org/apache/lens/api/query/SchedulerJobInfo.java
 index 92260b5..b0c44be 100644
@@ -1562,3 +1588,258 @@ index 06cae12..cd344a0 100644
      <guava.version>13.0.1</guava.version>
      <lombok.version>1.16.6</lombok.version>
      <lombok.maven.plugin.version>1.16.4.1</lombok.maven.plugin.version>
+-- 
+1.9.1
+
+
+From 791489cb30ba38922aca681677689e2d10de5510 Mon Sep 17 00:00:00 2001
+From: Ajay Yadava <ajaynsit@gmail.com>
+Date: Wed, 16 Mar 2016 02:16:14 +0530
+Subject: [PATCH 2/2] Alarm Service - code complete. Needs testing.
+
+---
+ .../notification/services/AlarmService.java        | 128 ++++++++++++++++-----
+ .../notification/services/AlarmServiceTest.java    |  42 +++++++
+ 2 files changed, 142 insertions(+), 28 deletions(-)
+ create mode 100644 lens-server/src/test/java/org/apache/lens/server/scheduler/notification/services/AlarmServiceTest.java
+
+diff --git a/lens-server/src/main/java/org/apache/lens/server/scheduler/notification/services/AlarmService.java b/lens-server/src/main/java/org/apache/lens/server/scheduler/notification/services/AlarmService.java
+index 9f16a29..d1462bb 100644
+--- a/lens-server/src/main/java/org/apache/lens/server/scheduler/notification/services/AlarmService.java
++++ b/lens-server/src/main/java/org/apache/lens/server/scheduler/notification/services/AlarmService.java
+@@ -19,18 +19,31 @@
+ package org.apache.lens.server.scheduler.notification.services;
+ 
+ import lombok.extern.slf4j.Slf4j;
+-import org.apache.hive.com.esotericsoftware.minlog.Log;
++import org.apache.hadoop.hive.conf.HiveConf;
+ import org.apache.hive.service.cli.CLIService;
+ import org.apache.lens.api.query.SchedulerJobHandle;
+ import org.apache.lens.api.scheduler.XFrequency;
+ import org.apache.lens.api.scheduler.XFrequencyEnum;
+ import org.apache.lens.server.BaseLensService;
+ import org.apache.lens.server.api.error.LensException;
+-import org.apache.lens.server.api.events.LensEventService;
+ import org.apache.lens.server.api.events.SchedulerAlarmEvent;
+ import org.apache.lens.server.api.health.HealthStatus;
+ import org.joda.time.DateTime;
+-import org.quartz.*;
++import org.quartz.CalendarIntervalScheduleBuilder;
++import org.quartz.CronScheduleBuilder;
++import org.quartz.DateBuilder;
++import org.quartz.Job;
++import org.quartz.JobBuilder;
++import org.quartz.JobDataMap;
++import org.quartz.JobDetail;
++import org.quartz.JobExecutionContext;
++import org.quartz.JobExecutionException;
++import org.quartz.JobKey;
++import org.quartz.Scheduler;
++import org.quartz.SchedulerException;
++import org.quartz.Trigger;
++import org.quartz.TriggerBuilder;
++import org.quartz.impl.StdSchedulerFactory;
+ 
+ import java.util.TimeZone;
+ 
+@@ -46,6 +59,8 @@ import java.util.TimeZone;
+ @Slf4j
+ public class AlarmService extends BaseLensService {
+ 
++  private Scheduler scheduler;
++
+   /**
+    * Creates a new instance of AlarmService.
+    *
+@@ -58,9 +73,33 @@ public class AlarmService extends BaseLensService {
+ 
+   @Override
+   public HealthStatus getHealthStatus() {
+-    return null;
++    return new HealthStatus(true, "AlarmService is running fine.");
++  }
++
++  public synchronized void init(HiveConf hiveConf) {
++    try {
++      this.scheduler = StdSchedulerFactory.getDefaultScheduler();
++    } catch (SchedulerException e) {
++      log.error("Failed to initialize the Quartz Scheduler for AlarmService.", e);
++    }
++  }
++
++  public synchronized void start() {
++    try {
++      scheduler.start();
++    } catch (SchedulerException e) {
++      log.error("Failed to start the Quartz Scheduler for AlarmService.", e);
++    }
+   }
+ 
++  @Override
++  public synchronized void stop() {
++    try {
++      scheduler.shutdown();
++    } catch (SchedulerException e) {
++      log.error("Failed to shut down the Quartz Scheduler for AlarmService.", e);
++    }
++  }
+ 
+   public void schedule(DateTime start, DateTime end, XFrequency frequency, TimeZone tz, SchedulerJobHandle jobHandle) {
+     // accept the schedule and then keep on sending the notifications for that schedule
+@@ -68,39 +107,76 @@ public class AlarmService extends BaseLensService {
+     JobDataMap map = new JobDataMap();
+     map.put("nominalTime", currentTime.getMillis());
+     map.put("jobHandle", jobHandle.getHandleIdString());
++
+     JobDetail job = JobBuilder.newJob(LensJob.class).withIdentity("toBeFixed", "toBeFixed")
+         .usingJobData(map).build();
+ 
+-      // TODO Handle past events.??
+-//    // Schedule future events using Quartz
+-
+-    CalendarIntervalTrigger trigger = TriggerBuilder.newTrigger()
+-        .withIdentity(jobHandle.getHandleIdString(), "LensScheduler")
+-        .startAt(start.toDate())
+-        .endAt(end.toDate())
+-        .withSchedule(
+-            CalendarIntervalScheduleBuilder.calendarIntervalSchedule()
+-                .withInterval(frequency.getFrequencyAsInt(), getTimeUnit(request.getFrequency().getTimeUnit()))
+-                .withMisfireHandlingInstructionFireAndProceed())
+-        .build();
+-
+-    // define the job and tie it to our Job class
+-    JobDetail job = JobBuilder.newJob(LensJob.class)
+-        .withIdentity(getJobKey(notificationRequest.getCallbackId().toString()))
+-        .setJobData(getJobDataMap((AlarmRequest) notificationRequest))
+-        .build();
++    // TODO Handle past events.??
++    Trigger trigger;
++    if (frequency.getEnum() != null) { //for enum expression:  create a trigger using calendar interval
++      CalendarIntervalScheduleBuilder scheduleBuilder = CalendarIntervalScheduleBuilder.calendarIntervalSchedule()
++          .withInterval(getTimeInterval(frequency.getEnum()), getTimeUnit(frequency.getEnum()))
++          .withMisfireHandlingInstructionFireAndProceed();
++      trigger = TriggerBuilder.newTrigger()
++          .withIdentity(jobHandle.getHandleIdString(), "LensScheduler")
++          .startAt(start.toDate()) //TODO check that past dates are also valid.
++          .endAt(end.toDate())
++          .withSchedule(scheduleBuilder)
++          .build();
++    } else { // for cron expression create a cron trigger
++      trigger = TriggerBuilder.newTrigger()
++          .withIdentity(jobHandle.getHandleIdString(), "LensScheduler")
++          .withSchedule(CronScheduleBuilder.cronSchedule(frequency.getCronExpression()))
++          .build();
++    }
+ 
+     // Tell quartz to run the job using our trigger
+     try {
+       scheduler.scheduleJob(job, trigger);
+     } catch (SchedulerException e) {
+-      log.error("Error scheduling entity {}", trigger.getKey());
+-//      throw new Exception(e);
++      log.error("Error scheduling job with jobHandle: {}", jobHandle);
++      throw new RuntimeException("Failed to schedule job with jobHandle: " + jobHandle, e);
++    }
++  }
++
++
++  private int getTimeInterval(XFrequencyEnum frequencyEnum) {
++    // since quarterly is not supported natively, we express it as 3 months
++    return frequencyEnum == XFrequencyEnum.QUARTERLY ? 3 : 1;
++  }
++
++
++  // Maps the timeunit in entity specification to the one in Quartz DateBuilder
++  private DateBuilder.IntervalUnit getTimeUnit(XFrequencyEnum frequencyEnum) {
++    switch (frequencyEnum) {
++
++    case DAILY:
++      return DateBuilder.IntervalUnit.DAY;
++
++    case WEEKLY:
++      return DateBuilder.IntervalUnit.WEEK;
++
++    case MONTHLY:
++      return DateBuilder.IntervalUnit.MONTH;
++
++    case QUARTERLY:
++      return DateBuilder.IntervalUnit.MONTH;
++
++    case YEARLY:
++      return DateBuilder.IntervalUnit.YEAR;
++
++    default:
++      throw new IllegalArgumentException("Invalid frequency enum expression: " + frequencyEnum.name());
+     }
+   }
+ 
+   public void unSchedule(SchedulerJobHandle jobHandle) {
+     // stop sending notifications for this job handle
++    try {
++      scheduler.deleteJob(JobKey.jobKey(jobHandle.getHandleIdString(), "LensScheduler"));
++    } catch (SchedulerException e) {
++      log.error("Failed to remove alarm triggers for job with jobHandle: " + jobHandle, e);
++    }
+   }
+ 
+   private class LensJob implements Job {
+@@ -120,8 +196,4 @@ public class AlarmService extends BaseLensService {
+       }
+     }
+   }
+-
+-  public static void main(String[] args) {
+-    // test by scheduling a job in past and see that
+-  }
+ }
+diff --git a/lens-server/src/test/java/org/apache/lens/server/scheduler/notification/services/AlarmServiceTest.java b/lens-server/src/test/java/org/apache/lens/server/scheduler/notification/services/AlarmServiceTest.java
+new file mode 100644
+index 0000000..62907c9
+--- /dev/null
++++ b/lens-server/src/test/java/org/apache/lens/server/scheduler/notification/services/AlarmServiceTest.java
+@@ -0,0 +1,42 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ * <p/>
++ * http://www.apache.org/licenses/LICENSE-2.0
++ * <p/>
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package org.apache.lens.server.scheduler.notification.services;
++
++/**
++ * This class contains the tests for {@link org.apache.lens.server.scheduler.notification.services.AlarmService}
++ */
++public class AlarmServiceTest {
++
++  // happy case that on subscribe of a service we get notifications as on time
++
++  // test notifications for two scheduled queries.
++
++  // validate a couple of cron expressions
++
++  // check what happens on a wrong cron expression
++
++  // validate for quarterly
++
++  // subscribe multiple and see that all are scheduled or not.
++
++  // test that it works for events in past as well.
++
++  // what happens once the system is restarted, are all alerts subscribed again? in that case from what time will they
++  // start firing the alerts? (start time?)
++}
+-- 
+1.9.1
+
