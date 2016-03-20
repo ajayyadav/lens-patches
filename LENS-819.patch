@@ -1,33 +1,32 @@
-From a8951813307d4ddeb7802d6dd1fc227cc044a27a Mon Sep 17 00:00:00 2001
+From 8865db829805e21153634eb751283f20816109fd Mon Sep 17 00:00:00 2001
 From: Ajay Yadava <ajaynsit@gmail.com>
-Date: Thu, 17 Mar 2016 20:16:24 +0530
-Subject: [PATCH] LENS-819 completed, check the build.
+Date: Sun, 20 Mar 2016 18:42:40 +0530
+Subject: [PATCH] FALCON-819
 
 ---
- .../main/java/org/apache/lens/api/TimeLines.java   |  74 ++++++++
+ .../main/java/org/apache/lens/api/TimeLines.java   |  94 +++++++++++
  .../apache/lens/cli/commands/LensFactCommands.java |   9 +-
  .../java/org/apache/lens/client/LensClient.java    |   3 +-
  .../org/apache/lens/client/LensMetadataClient.java |   5 +-
  .../lens/cube/metadata/CubeMetastoreClient.java    |  39 ++++-
- .../timeline/EndsAndHolesPartitionTimeline.java    |  19 +++
+ .../timeline/EndsAndHolesPartitionTimeline.java    |  30 +++-
  .../cube/metadata/timeline/PartitionTimeline.java  |   9 +
- .../metadata/timeline/RangesPartitionTimeline.java |  36 +++-
- .../timeline/StoreAllPartitionTimeline.java        |  45 ++++-
- .../org/apache/lens/cube/parse/CubeTestSetup.java  |  17 +-
+ .../metadata/timeline/RangesPartitionTimeline.java |  42 ++++-
+ .../timeline/StoreAllPartitionTimeline.java        |  44 ++++-
+ .../org/apache/lens/cube/parse/CubeTestSetup.java  |  21 ++-
  .../server/api/metastore/CubeMetastoreService.java |   3 +-
  .../server/metastore/CubeMetastoreServiceImpl.java |  11 +-
  .../lens/server/metastore/MetastoreResource.java   |  11 +-
- .../org/apache/lens/server/LensJerseyTest.java     |   4 +-
  .../server/metastore/TestMetastoreService.java     | 188 ++++++++++++++++++++-
- 15 files changed, 426 insertions(+), 47 deletions(-)
+ 14 files changed, 462 insertions(+), 47 deletions(-)
  create mode 100644 lens-api/src/main/java/org/apache/lens/api/TimeLines.java
 
 diff --git a/lens-api/src/main/java/org/apache/lens/api/TimeLines.java b/lens-api/src/main/java/org/apache/lens/api/TimeLines.java
 new file mode 100644
-index 0000000..902a835
+index 0000000..ca0818a
 --- /dev/null
 +++ b/lens-api/src/main/java/org/apache/lens/api/TimeLines.java
-@@ -0,0 +1,74 @@
+@@ -0,0 +1,94 @@
 +/**
 + * Licensed to the Apache Software Foundation (ASF) under one
 + * or more contributor license agreements.  See the NOTICE file
@@ -88,22 +87,42 @@ index 0000000..902a835
 +  @NoArgsConstructor(access = AccessLevel.PROTECTED)
 +  public static class TimeLine extends ToYAMLString {
 +
++    private String type;
++
 +    private String storageTableName;
 +
 +    private String updatePeriod;
 +
 +    private String partCol;
 +
-+    private DateTime first;
++    private String first;
 +
-+    private DateTime last;
++    private String latest;
 +
-+    private List<DateTime> holes;
++    private List<String> holes;
++
++    @Override
++    public String toString() {
++      StringBuilder sb = new StringBuilder();
++      sb.append(type + "(storageTableName=" + storageTableName + ", updatePeriod=" + updatePeriod + ", partCol="
++          + partCol + ", first=" + first + ", latest=" + latest + ", holes=");
++      if (holes == null || holes.isEmpty()) {
++        sb.append("[]");
++      } else {
++        for (String s : holes) {
++          sb.append(s);
++          sb.append(", ");
++        }
++        sb.setLength(sb.length() - 2); // remove trailing ", "
++      }
++      return sb.toString();
++    }
++
 +  }
 +
 +}
 diff --git a/lens-cli/src/main/java/org/apache/lens/cli/commands/LensFactCommands.java b/lens-cli/src/main/java/org/apache/lens/cli/commands/LensFactCommands.java
-index 6457bce..5065016 100644
+index 6457bce..5433e6e 100644
 --- a/lens-cli/src/main/java/org/apache/lens/cli/commands/LensFactCommands.java
 +++ b/lens-cli/src/main/java/org/apache/lens/cli/commands/LensFactCommands.java
 @@ -19,9 +19,11 @@
@@ -127,7 +146,7 @@ index 6457bce..5065016 100644
 +    for (TimeLines.TimeLine timeLine : getClient().getPartitionTimelines(factName, storageName,
 +      updatePeriod, timeDimension)) {
 +      result.add(timeLine.toString());
-+    };
++    }
 +    return result;
    }
  
@@ -274,36 +293,47 @@ index 02bbbbd..d0d1ee5 100644
      if (StringUtils.isNotBlank(property)) {
        for (String timeStr : property.split("\\s*,\\s*")) {
 diff --git a/lens-cube/src/main/java/org/apache/lens/cube/metadata/timeline/EndsAndHolesPartitionTimeline.java b/lens-cube/src/main/java/org/apache/lens/cube/metadata/timeline/EndsAndHolesPartitionTimeline.java
-index c588dc7..18c1ec8 100644
+index c588dc7..aa3e071 100644
 --- a/lens-cube/src/main/java/org/apache/lens/cube/metadata/timeline/EndsAndHolesPartitionTimeline.java
 +++ b/lens-cube/src/main/java/org/apache/lens/cube/metadata/timeline/EndsAndHolesPartitionTimeline.java
-@@ -21,6 +21,8 @@ package org.apache.lens.cube.metadata.timeline;
+@@ -19,8 +19,15 @@
+ package org.apache.lens.cube.metadata.timeline;
  
- import java.util.*;
  
-+import org.apache.lens.api.DateTime;
+-import java.util.*;
+-
++import java.util.Date;
++import java.util.HashMap;
++import java.util.Iterator;
++import java.util.LinkedList;
++import java.util.List;
++import java.util.Map;
++import java.util.TreeSet;
++
 +import org.apache.lens.api.TimeLines;
  import org.apache.lens.cube.metadata.MetastoreUtil;
  import org.apache.lens.cube.metadata.TimePartition;
  import org.apache.lens.cube.metadata.TimeRange;
-@@ -184,6 +186,23 @@ public class EndsAndHolesPartitionTimeline extends PartitionTimeline {
+@@ -184,6 +191,25 @@ public class EndsAndHolesPartitionTimeline extends PartitionTimeline {
    }
  
    @Override
 +  public TimeLines.TimeLine toTimeLine() {
-+    DateTime fir = null;
-+    DateTime last = null;
++    String fir = null;
++    String last = null;
 +    if (first != null) {
-+      fir = new DateTime(first.getDate());
++      fir = getUpdatePeriod().format(first.getDate());
 +    }
 +    if (latest != null) {
-+      last = new DateTime(latest.getDate());
++      last = getUpdatePeriod().format(latest.getDate());
 +    }
-+    List<DateTime> missing = new LinkedList<>();
++    List<String> missing = new LinkedList<>();
 +    for (TimePartition el : holes) {
-+      missing.add(new DateTime(el.getDate()));
++      missing.add(getUpdatePeriod().format(el.getDate()));
 +    }
-+    return new TimeLines.TimeLine(getStorageTableName(), getUpdatePeriod().getName(), getPartCol(), fir, last, missing);
++
++    return new TimeLines.TimeLine(this.getClass().getSimpleName(),
++        getStorageTableName(), getUpdatePeriod().getName(), getPartCol(), fir, last, missing);
 +  }
 +
 +  @Override
@@ -336,34 +366,42 @@ index 1642482..14180ed 100644
 +  public abstract TimeLines.TimeLine toTimeLine();
  }
 diff --git a/lens-cube/src/main/java/org/apache/lens/cube/metadata/timeline/RangesPartitionTimeline.java b/lens-cube/src/main/java/org/apache/lens/cube/metadata/timeline/RangesPartitionTimeline.java
-index 6c9eb7a..2aa62df 100644
+index 6c9eb7a..e586e71 100644
 --- a/lens-cube/src/main/java/org/apache/lens/cube/metadata/timeline/RangesPartitionTimeline.java
 +++ b/lens-cube/src/main/java/org/apache/lens/cube/metadata/timeline/RangesPartitionTimeline.java
-@@ -19,10 +19,10 @@
+@@ -19,11 +19,20 @@
  package org.apache.lens.cube.metadata.timeline;
  
  
--import java.util.HashMap;
--import java.util.Iterator;
--import java.util.Map;
-+import java.util.*;
++import java.util.Calendar;
++import java.util.Date;
+ import java.util.HashMap;
+ import java.util.Iterator;
++import java.util.LinkedList;
++import java.util.List;
+ import java.util.Map;
  
-+import org.apache.lens.api.DateTime;
+-import org.apache.lens.cube.metadata.*;
 +import org.apache.lens.api.TimeLines;
- import org.apache.lens.cube.metadata.*;
++import org.apache.lens.cube.metadata.MetastoreUtil;
++import org.apache.lens.cube.metadata.TimePartition;
++import org.apache.lens.cube.metadata.TimePartitionRange;
++import org.apache.lens.cube.metadata.TimePartitionRangeList;
++import org.apache.lens.cube.metadata.UpdatePeriod;
  import org.apache.lens.server.api.error.LensException;
  
-@@ -234,6 +234,36 @@ public class RangesPartitionTimeline extends PartitionTimeline {
+ import com.google.common.base.Strings;
+@@ -234,6 +243,37 @@ public class RangesPartitionTimeline extends PartitionTimeline {
    }
  
    @Override
 +  public TimeLines.TimeLine toTimeLine() {
-+    List<DateTime> holes = new LinkedList<>();
-+    DateTime first = null;
-+    DateTime last = null;
++    List<String> holes = new LinkedList<>();
++    String first = null;
++    String last = null;
 +    if (!ranges.isEmpty()) {
-+      first = new DateTime(ranges.get(0).getBegin().getDate());
-+      last = new DateTime(ranges.get(ranges.size() -1).getEnd().getDate());
++      first = getUpdatePeriod().format(ranges.get(0).getBegin().getDate());
++      last = getUpdatePeriod().format(ranges.get(ranges.size() -1).getEnd().getDate());
 +
 +      Calendar calendar = Calendar.getInstance();
 +      calendar.setTime(ranges.get(0).getEnd().getDate());
@@ -372,7 +410,7 @@ index 6c9eb7a..2aa62df 100644
 +      for (int i = 1; i < ranges.size(); i++) {
 +        Date next = ranges.get(i).getBegin().getDate();
 +        while (prev.before(next)) { // add all from (prevRange.end + 1) till currentRange.begin
-+          holes.add(new DateTime(prev));
++          holes.add(getUpdatePeriod().format(prev));
 +          calendar.setTime(prev);
 +          calendar.add(getUpdatePeriod().calendarField(), 1);
 +          prev = calendar.getTime(); // make prev as next instance
@@ -383,7 +421,8 @@ index 6c9eb7a..2aa62df 100644
 +        prev = calendar.getTime();
 +      }
 +    }
-+    return new TimeLines.TimeLine(getStorageTableName(), getUpdatePeriod().getName(), getPartCol(), first, last, holes);
++    return new TimeLines.TimeLine(this.getClass().getSimpleName(), getStorageTableName(), getUpdatePeriod().getName(),
++        getPartCol(), first, last, holes);
 +  }
 +
 +  @Override
@@ -391,10 +430,10 @@ index 6c9eb7a..2aa62df 100644
  
      return new Iterator<TimePartition>() {
 diff --git a/lens-cube/src/main/java/org/apache/lens/cube/metadata/timeline/StoreAllPartitionTimeline.java b/lens-cube/src/main/java/org/apache/lens/cube/metadata/timeline/StoreAllPartitionTimeline.java
-index a6cb8da..6e4063c 100644
+index a6cb8da..83a4d06 100644
 --- a/lens-cube/src/main/java/org/apache/lens/cube/metadata/timeline/StoreAllPartitionTimeline.java
 +++ b/lens-cube/src/main/java/org/apache/lens/cube/metadata/timeline/StoreAllPartitionTimeline.java
-@@ -18,8 +18,18 @@
+@@ -18,8 +18,17 @@
   */
  package org.apache.lens.cube.metadata.timeline;
  
@@ -410,12 +449,11 @@ index a6cb8da..6e4063c 100644
 +import java.util.Map;
 +import java.util.TreeSet;
 +
-+import org.apache.lens.api.DateTime;
 +import org.apache.lens.api.TimeLines;
  import org.apache.lens.cube.metadata.MetastoreUtil;
  import org.apache.lens.cube.metadata.TimePartition;
  import org.apache.lens.cube.metadata.UpdatePeriod;
-@@ -106,6 +116,37 @@ public class StoreAllPartitionTimeline extends PartitionTimeline {
+@@ -106,6 +115,37 @@ public class StoreAllPartitionTimeline extends PartitionTimeline {
    }
  
    @Override
@@ -425,7 +463,7 @@ index a6cb8da..6e4063c 100644
 +      availableDates.add(el.getDate());
 +    }
 +
-+    List<DateTime> holes = new LinkedList<>();
++    List<String> holes = new LinkedList<>();
 +    Date first = null;
 +    Date last = null;
 +    if (!allPartitions.isEmpty()) {
@@ -442,11 +480,11 @@ index a6cb8da..6e4063c 100644
 +
 +      allDates.removeAll(availableDates);
 +      for (Date date : allDates) {
-+        holes.add(new DateTime(date));
++        holes.add(getUpdatePeriod().format(date));
 +      }
 +    }
-+    return new TimeLines.TimeLine(getStorageTableName(), getUpdatePeriod().getName(), getPartCol(),
-+      new DateTime(first), new DateTime(last), holes);
++    return new TimeLines.TimeLine(this.getClass().getSimpleName(), getStorageTableName(), getUpdatePeriod().getName(),
++        getPartCol(), getUpdatePeriod().format(first), getUpdatePeriod().format(last), holes);
 +  }
 +
 +  @Override
@@ -454,7 +492,7 @@ index a6cb8da..6e4063c 100644
      return getAllPartitions().iterator();
    }
 diff --git a/lens-cube/src/test/java/org/apache/lens/cube/parse/CubeTestSetup.java b/lens-cube/src/test/java/org/apache/lens/cube/parse/CubeTestSetup.java
-index 42decc6..10a3665 100644
+index 42decc6..4f0f7e8 100644
 --- a/lens-cube/src/test/java/org/apache/lens/cube/parse/CubeTestSetup.java
 +++ b/lens-cube/src/test/java/org/apache/lens/cube/parse/CubeTestSetup.java
 @@ -29,6 +29,7 @@ import static org.testng.Assert.*;
@@ -465,7 +503,15 @@ index 42decc6..10a3665 100644
  import org.apache.lens.cube.metadata.*;
  import org.apache.lens.cube.metadata.ExprColumn.ExprSpec;
  import org.apache.lens.cube.metadata.ReferencedDimAttribute.ChainRefCol;
-@@ -1483,15 +1484,23 @@ public class CubeTestSetup {
+@@ -1476,24 +1477,32 @@ public class CubeTestSetup {
+   }
+ 
+   private void assertTimeline(CubeMetastoreClient client, String factName, String storageName,
+-    UpdatePeriod updatePeriod, String timeDim, PartitionTimeline expectedTimeline)
+-    throws Exception {
++    UpdatePeriod updatePeriod, String timeDim, PartitionTimeline expectedTimeline) throws Exception {
+     assertNotNull(factName);
+     assertNotNull(storageName);
      assertNotNull(updatePeriod);
      assertNotNull(timeDim);
      String storageTableName = MetastoreUtil.getFactOrDimtableStorageTableName(factName, storageName);
@@ -475,24 +521,27 @@ index 42decc6..10a3665 100644
      assertEquals(timelines.size(), 1);
 -    PartitionTimeline actualTimeline = timelines.get(0);
 -    assertEquals(actualTimeline, expectedTimeline);
-+    if (expectedTimeline.getLatestDate() != null) {
-+      assertEquals(timelines.get(0).getLast().getDate(), expectedTimeline.getLatestDate());
-+    } else {
-+      assertNull(timelines.get(0).getLast());
-+    }
++    assertEqualTimeLine(timelines, expectedTimeline, updatePeriod);
      assertEquals(client.getTable(storageTableName).getParameters()
        .get(MetastoreUtil.getPartitionTimelineStorageClassKey(updatePeriod,
          timeDim)), expectedTimeline.getClass().getCanonicalName());
      expectedTimeline.init(client.getTable(MetastoreUtil.getFactOrDimtableStorageTableName(factName, storageName)));
 -    assertEquals(actualTimeline, expectedTimeline);
-+    if (expectedTimeline.getLatestDate() != null) {
-+      assertEquals(timelines.get(0).getLast().getDate(), expectedTimeline.getLatestDate());
-+    } else {
-+      assertNull(timelines.get(0).getLast());
-+    }
++    assertEqualTimeLine(timelines, expectedTimeline, updatePeriod);
    }
  
++  private void assertEqualTimeLine(List<TimeLines.TimeLine> timelines, PartitionTimeline expectedTimeline,
++                                   UpdatePeriod updatePeriod) {
++    if (expectedTimeline.getLatestDate() != null) {
++      assertEquals(timelines.get(0).getLatest(), updatePeriod.format(expectedTimeline.getLatestDate()));
++    } else {
++      assertNull(timelines.get(0).getLatest());
++    }
++  }
++  
    private void assertTimeline(CubeMetastoreClient client, String factName, String storageName,
+     UpdatePeriod updatePeriod, String timeDim, Class<? extends PartitionTimeline> partitionTimelineClass)
+     throws Exception {
 diff --git a/lens-server-api/src/main/java/org/apache/lens/server/api/metastore/CubeMetastoreService.java b/lens-server-api/src/main/java/org/apache/lens/server/api/metastore/CubeMetastoreService.java
 index c11fd83..a0cbfa4 100644
 --- a/lens-server-api/src/main/java/org/apache/lens/server/api/metastore/CubeMetastoreService.java
@@ -591,29 +640,8 @@ index 684e2ed..3ad3f49 100644
      } catch (LensException exc) {
        checkTableNotFound(exc, factName);
        log.error("Error finding partition timelines for fact: {}", factName, exc);
-diff --git a/lens-server/src/test/java/org/apache/lens/server/LensJerseyTest.java b/lens-server/src/test/java/org/apache/lens/server/LensJerseyTest.java
-index fb757e4..24f8599 100644
---- a/lens-server/src/test/java/org/apache/lens/server/LensJerseyTest.java
-+++ b/lens-server/src/test/java/org/apache/lens/server/LensJerseyTest.java
-@@ -96,14 +96,14 @@ public abstract class LensJerseyTest extends JerseyTest {
-       socket = new ServerSocket(0);
-       setPort(socket.getLocalPort());
-     } catch (IOException e) {
--      log.info("Exception occured while creating socket. Use a default port number {}", port);
-+      log.info("Exception occurred while creating socket. Use a default port number {}", port);
-     } finally {
-       try {
-         if (socket != null) {
-           socket.close();
-         }
-       } catch (IOException e) {
--        log.info("Exception occured while closing the socket", e);
-+        log.info("Exception occurred while closing the socket", e);
-       }
-     }
-     return port;
 diff --git a/lens-server/src/test/java/org/apache/lens/server/metastore/TestMetastoreService.java b/lens-server/src/test/java/org/apache/lens/server/metastore/TestMetastoreService.java
-index 3b091f5..7ca78cd 100644
+index 3b091f5..bf1d6ee 100644
 --- a/lens-server/src/test/java/org/apache/lens/server/metastore/TestMetastoreService.java
 +++ b/lens-server/src/test/java/org/apache/lens/server/metastore/TestMetastoreService.java
 @@ -18,18 +18,39 @@
@@ -822,19 +850,19 @@ index 3b091f5..7ca78cd 100644
 +        .queryParam("sessionid", lensSessionId).queryParam("storage", "S1").queryParam("updatePeriod", "HOURLY")
 +        .request(mediaType)
 +        .get(TimeLines.class);
-+      Date expectedFirst = UpdatePeriod.HOURLY.truncate(firstPartDate);
-+      Date expectedLast = UpdatePeriod.HOURLY.truncate(lastPartDate);
-+      Date expectedHole = UpdatePeriod.HOURLY.truncate(missingPartDate);
++      String expectedFirst = UpdatePeriod.HOURLY.format(firstPartDate);
++      String expectedLast = UpdatePeriod.HOURLY.format(lastPartDate);
++      String expectedHole = UpdatePeriod.HOURLY.format(missingPartDate);
 +      TimeLines.TimeLine actual = timeLinesResult.getTimeLines().get(0);
 +
 +      // assert storageTableName, partitionCol, updatePeriod, first, last and holes
 +      assertEquals(actual.getStorageTableName(), "s1_testfactstoragepartitiontimelines");
 +      assertEquals(actual.getUpdatePeriod(), "HOURLY");
 +      assertEquals(actual.getPartCol(), "dt");
-+      assertEquals(actual.getFirst().getDate(), expectedFirst);
-+      assertEquals(actual.getLast().getDate(), expectedLast);
++      assertEquals(actual.getFirst(), expectedFirst);
++      assertEquals(actual.getLatest(), expectedLast);
 +      assertEquals(actual.getHoles().size(), 1);
-+      assertEquals(actual.getHoles().get(0).getDate(), expectedHole);
++      assertEquals(actual.getHoles().get(0), expectedHole);
 +
 +    } finally {
 +      setCurrentDatabase(prevDb, mediaType);
@@ -846,5 +874,5 @@ index 3b091f5..7ca78cd 100644
    @Test(dataProvider = "mediaTypeData")
    public void testFactStoragePartitions(MediaType mediaType) throws Exception {
 -- 
-2.1.0
+1.9.1
 
