@@ -1,0 +1,481 @@
+From 137c049a8417a7633959ce927c243069d18e0d8f Mon Sep 17 00:00:00 2001
+From: Ajay Yadava <ajaynsit@gmail.com>
+Date: Mon, 21 Mar 2016 20:40:54 +0530
+Subject: [PATCH] LENS-987 Writing tests for AlarmService.
+
+---
+ lens-server-api/pom.xml                            |   4 +
+ .../server/api/events/SchedulerAlarmEvent.java     |  48 +++++
+ lens-server/pom.xml                                |   5 +
+ .../notification/services/AlarmService.java        | 202 +++++++++++++++++++++
+ .../notification/services/AlarmServiceTest.java    | 151 +++++++++++++++
+ pom.xml                                            |   1 +
+ 6 files changed, 411 insertions(+)
+ create mode 100644 lens-server-api/src/main/java/org/apache/lens/server/api/events/SchedulerAlarmEvent.java
+ create mode 100644 lens-server/src/main/java/org/apache/lens/server/scheduler/notification/services/AlarmService.java
+ create mode 100644 lens-server/src/test/java/org/apache/lens/server/scheduler/notification/services/AlarmServiceTest.java
+
+diff --git a/lens-server-api/pom.xml b/lens-server-api/pom.xml
+index 8304279..273106f 100644
+--- a/lens-server-api/pom.xml
++++ b/lens-server-api/pom.xml
+@@ -93,5 +93,9 @@
+       <groupId>org.slf4j</groupId>
+       <artifactId>jcl-over-slf4j</artifactId>
+     </dependency>
++    <dependency>
++      <groupId>joda-time</groupId>
++      <artifactId>joda-time</artifactId>
++    </dependency>
+   </dependencies>
+ </project>
+diff --git a/lens-server-api/src/main/java/org/apache/lens/server/api/events/SchedulerAlarmEvent.java b/lens-server-api/src/main/java/org/apache/lens/server/api/events/SchedulerAlarmEvent.java
+new file mode 100644
+index 0000000..4c3b132
+--- /dev/null
++++ b/lens-server-api/src/main/java/org/apache/lens/server/api/events/SchedulerAlarmEvent.java
+@@ -0,0 +1,48 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ * <p/>
++ * http://www.apache.org/licenses/LICENSE-2.0
++ * <p/>
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package org.apache.lens.server.api.events;
++
++import org.apache.lens.api.query.SchedulerJobHandle;
++import org.apache.lens.api.query.SchedulerJobInstanceHandle;
++import org.joda.time.DateTime;
++
++/**
++ * This event is triggered by the AlarmService whenever a scheduled query needs to be scheduled.
++ */
++public class SchedulerAlarmEvent extends LensEvent {
++
++  /**
++   * jobHandle for which the alarm needs to be triggered.
++   */
++  private SchedulerJobHandle jobHandle;
++
++  private DateTime nominalTime;
++
++  public SchedulerAlarmEvent(SchedulerJobHandle jobHandle, DateTime nominalTime) {
++    super(nominalTime.getMillis());
++    this.jobHandle = jobHandle;
++    this.nominalTime = nominalTime;
++  }
++
++  @Override
++  public String getEventId() {
++    return jobHandle.getHandleIdString();
++  }
++
++}
+diff --git a/lens-server/pom.xml b/lens-server/pom.xml
+index 75b8b32..f8bba1f 100644
+--- a/lens-server/pom.xml
++++ b/lens-server/pom.xml
+@@ -230,6 +230,11 @@
+       <artifactId>guava</artifactId>
+     </dependency>
+     <dependency>
++      <groupId>org.quartz-scheduler</groupId>
++      <artifactId>quartz</artifactId>
++      <version>${quartz.version}</version>
++    </dependency>
++    <dependency>
+       <groupId>org.apache.lens</groupId>
+       <artifactId>lens-server-api</artifactId>
+       <type>test-jar</type>
+diff --git a/lens-server/src/main/java/org/apache/lens/server/scheduler/notification/services/AlarmService.java b/lens-server/src/main/java/org/apache/lens/server/scheduler/notification/services/AlarmService.java
+new file mode 100644
+index 0000000..b04961d
+--- /dev/null
++++ b/lens-server/src/main/java/org/apache/lens/server/scheduler/notification/services/AlarmService.java
+@@ -0,0 +1,202 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ * <p/>
++ * http://www.apache.org/licenses/LICENSE-2.0
++ * <p/>
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package org.apache.lens.server.scheduler.notification.services;
++
++import java.util.TimeZone;
++
++import org.apache.lens.api.query.SchedulerJobHandle;
++import org.apache.lens.api.scheduler.XFrequency;
++import org.apache.lens.api.scheduler.XFrequencyEnum;
++import org.apache.lens.server.BaseLensService;
++import org.apache.lens.server.api.error.LensException;
++import org.apache.lens.server.api.events.SchedulerAlarmEvent;
++import org.apache.lens.server.api.health.HealthStatus;
++
++import org.apache.hadoop.hive.conf.HiveConf;
++import org.apache.hive.service.cli.CLIService;
++
++import org.joda.time.DateTime;
++import org.joda.time.DateTimeZone;
++import org.quartz.CalendarIntervalScheduleBuilder;
++import org.quartz.CronScheduleBuilder;
++import org.quartz.DateBuilder;
++import org.quartz.Job;
++import org.quartz.JobBuilder;
++import org.quartz.JobDataMap;
++import org.quartz.JobDetail;
++import org.quartz.JobExecutionContext;
++import org.quartz.JobExecutionException;
++import org.quartz.JobKey;
++import org.quartz.Scheduler;
++import org.quartz.SchedulerException;
++import org.quartz.Trigger;
++import org.quartz.TriggerBuilder;
++import org.quartz.impl.StdSchedulerFactory;
++
++import lombok.extern.slf4j.Slf4j;
++
++/**
++ * This service is used primarily by Scheduler to get alarm notifications for scheduled queries.
++ *
++ * As a schedule this service accepts start time, frequency, end time and timeZone. It also requires the
++ * {@link org.apache.lens.api.query.SchedulerJobHandle} which it sends as part of the
++ * {@link org.apache.lens.server.api.events.SchedulerAlarmEvent} to inform the scheduler about the job for which
++ * job the notification has been generated.
++ */
++@Slf4j
++public class AlarmService extends BaseLensService {
++
++  private Scheduler scheduler;
++
++  /**
++   * Creates a new instance of AlarmService.
++   *
++   * @param name       the name
++   * @param cliService the cli service
++   */
++  protected AlarmService(String name, CLIService cliService) {
++    super(name, cliService);
++  }
++
++  @Override
++  public HealthStatus getHealthStatus() {
++    return new HealthStatus(true, "AlarmService is running fine.");
++  }
++
++  public synchronized void init(HiveConf hiveConf) {
++    super.init(hiveConf);
++    try {
++      this.scheduler = StdSchedulerFactory.getDefaultScheduler();
++    } catch (SchedulerException e) {
++      log.error("Failed to initialize the Quartz Scheduler for AlarmService.", e);
++    }
++  }
++
++  public synchronized void start() {
++    try {
++      scheduler.start();
++    } catch (SchedulerException e) {
++      log.error("Failed to start the Quartz Scheduler for AlarmService.", e);
++    }
++  }
++
++  @Override
++  public synchronized void stop() {
++    try {
++      scheduler.shutdown();
++    } catch (SchedulerException e) {
++      log.error("Failed to shut down the Quartz Scheduler for AlarmService.", e);
++    }
++  }
++
++  public void schedule(DateTime start, DateTime end, XFrequency frequency, DateTimeZone tz,
++                       SchedulerJobHandle jobHandle) {
++    // accept the schedule and then keep on sending the notifications for that schedule
++    DateTime currentTime = DateTime.now();
++    JobDataMap map = new JobDataMap();
++    map.put("nominalTime", currentTime.getMillis());
++    map.put("jobHandle", jobHandle.getHandleIdString());
++
++    JobDetail job = JobBuilder.newJob(LensJob.class).withIdentity("toBeFixed", "toBeFixed").usingJobData(map).build();
++
++    Trigger trigger;
++    if (frequency.getEnum() != null) { //for enum expression:  create a trigger using calendar interval
++      CalendarIntervalScheduleBuilder scheduleBuilder = CalendarIntervalScheduleBuilder.calendarIntervalSchedule()
++          .withInterval(getTimeInterval(frequency.getEnum()), getTimeUnit(frequency.getEnum()))
++          .withMisfireHandlingInstructionFireAndProceed();
++      trigger = TriggerBuilder.newTrigger()
++          .withIdentity(jobHandle.getHandleIdString(), "LensScheduler")
++          .startAt(start.toDate())
++          .endAt(end.toDate())
++          .withSchedule(scheduleBuilder)
++          .build();
++    } else { // for cron expression create a cron trigger
++      trigger = TriggerBuilder.newTrigger()
++          .withIdentity(jobHandle.getHandleIdString(), "LensScheduler")
++          .withSchedule(CronScheduleBuilder.cronSchedule(frequency.getCronExpression()))
++          .build();
++    }
++
++    // Tell quartz to run the job using our trigger
++    try {
++      scheduler.scheduleJob(job, trigger);
++    } catch (SchedulerException e) {
++      log.error("Error scheduling job with jobHandle: {}", jobHandle);
++      throw new RuntimeException("Failed to schedule job with jobHandle: " + jobHandle, e);
++    }
++  }
++
++
++  private int getTimeInterval(XFrequencyEnum frequencyEnum) {
++    // since quarterly is not supported natively, we express it as 3 months
++    return frequencyEnum == XFrequencyEnum.QUARTERLY ? 3 : 1;
++  }
++
++
++  // Maps the timeunit in entity specification to the one in Quartz DateBuilder
++  private DateBuilder.IntervalUnit getTimeUnit(XFrequencyEnum frequencyEnum) {
++    switch (frequencyEnum) {
++
++    case DAILY:
++      return DateBuilder.IntervalUnit.DAY;
++
++    case WEEKLY:
++      return DateBuilder.IntervalUnit.WEEK;
++
++    case MONTHLY:
++      return DateBuilder.IntervalUnit.MONTH;
++
++    case QUARTERLY:
++      return DateBuilder.IntervalUnit.MONTH;
++
++    case YEARLY:
++      return DateBuilder.IntervalUnit.YEAR;
++
++    default:
++      throw new IllegalArgumentException("Invalid frequency enum expression: " + frequencyEnum.name());
++    }
++  }
++
++  public void unSchedule(SchedulerJobHandle jobHandle) {
++    // stop sending notifications for this job handle
++    try {
++      scheduler.deleteJob(JobKey.jobKey(jobHandle.getHandleIdString(), "LensScheduler"));
++    } catch (SchedulerException e) {
++      log.error("Failed to remove alarm triggers for job with jobHandle: " + jobHandle, e);
++    }
++  }
++
++  private class LensJob implements Job {
++
++    @Override
++    public void execute(JobExecutionContext jobExecutionContext) throws JobExecutionException {
++      JobDataMap data = jobExecutionContext.getMergedJobDataMap();
++      DateTime nominalTime = new DateTime(data.getLongValue("nominalTime"));
++      SchedulerJobHandle jobHandle = SchedulerJobHandle.fromString(data.getString("jobHandle"));
++      SchedulerAlarmEvent alarmEvent = new SchedulerAlarmEvent(jobHandle, nominalTime);
++      try {
++        getEventService().notifyEvent(alarmEvent);
++      } catch (LensException e) {
++        log.error("Failed to notify SchedulerAlarmEvent for jobHandle: {} and nominalTime: {}",
++            jobHandle.getHandleIdString(), nominalTime.toString(), e);
++        throw new JobExecutionException("Failed to notify alarmEvent", e);
++      }
++    }
++  }
++}
+diff --git a/lens-server/src/test/java/org/apache/lens/server/scheduler/notification/services/AlarmServiceTest.java b/lens-server/src/test/java/org/apache/lens/server/scheduler/notification/services/AlarmServiceTest.java
+new file mode 100644
+index 0000000..c242191
+--- /dev/null
++++ b/lens-server/src/test/java/org/apache/lens/server/scheduler/notification/services/AlarmServiceTest.java
+@@ -0,0 +1,151 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package org.apache.lens.server.scheduler.notification.services;
++
++import java.util.Date;
++import java.util.UUID;
++
++import org.apache.lens.api.query.SchedulerJobHandle;
++import org.apache.lens.api.scheduler.XFrequency;
++import org.apache.lens.api.scheduler.XFrequencyEnum;
++
++import org.apache.hadoop.hive.conf.HiveConf;
++import org.apache.hive.service.cli.CLIService;
++
++import org.joda.time.DateTime;
++import org.joda.time.DateTimeZone;
++import org.quartz.CalendarIntervalScheduleBuilder;
++import org.quartz.DateBuilder;
++import org.quartz.DisallowConcurrentExecution;
++import org.quartz.Job;
++import org.quartz.JobBuilder;
++import org.quartz.JobDetail;
++import org.quartz.JobExecutionContext;
++import org.quartz.JobExecutionException;
++import org.quartz.PersistJobDataAfterExecution;
++import org.quartz.Scheduler;
++import org.quartz.SchedulerException;
++import org.quartz.SchedulerFactory;
++import org.quartz.SchedulerMetaData;
++import org.quartz.Trigger;
++import org.quartz.TriggerBuilder;
++import org.quartz.impl.StdSchedulerFactory;
++import org.testng.Assert;
++import org.testng.annotations.AfterClass;
++import org.testng.annotations.BeforeClass;
++import org.testng.annotations.Test;
++
++/**
++ * Tests for AlarmService.
++ */
++public class AlarmServiceTest {
++
++  AlarmService alarmService;
++
++  @BeforeClass
++  public void setUp() {
++
++    alarmService = new AlarmService("alarm", new CLIService());
++    HiveConf conf = new HiveConf();
++    alarmService.init(conf);
++    alarmService.start();
++  }
++
++  @AfterClass
++  public void tearDown() {
++    alarmService.stop();
++  }
++
++
++  // test that quartz works for past events.
++  @Test
++  public void testPastEvents() throws SchedulerException, InterruptedException {
++    SchedulerFactory sf = new StdSchedulerFactory();
++    Scheduler scheduler = sf.getScheduler();
++    scheduler.start();
++    try {
++      // prepare a sample Job
++      JobDetail job = JobBuilder.newJob(TestJob.class).withIdentity("random", "group").build();
++      job.getJobDataMap().put("count", 0);
++      scheduler.scheduleJob(job, getPastPerSecondsTrigger());
++      Thread.sleep(2000);
++      SchedulerMetaData metaData = scheduler.getMetaData();
++      Assert.assertEquals(metaData.getNumberOfJobsExecuted(), 10);
++    } finally {
++      scheduler.shutdown();
++    }
++  }
++
++
++  private CalendarIntervalScheduleBuilder  getPerSecondCalendar() {
++    return CalendarIntervalScheduleBuilder.calendarIntervalSchedule()
++      .withInterval(1, DateBuilder.IntervalUnit.SECOND)
++      .withMisfireHandlingInstructionFireAndProceed();
++  }
++  private Trigger getPastPerSecondsTrigger() {
++    CalendarIntervalScheduleBuilder scheduleBuilder = getPerSecondCalendar();
++    Date start = new Date();
++    start = new Date(start.getTime() - 10000);
++    Date end = new Date();
++
++    Trigger trigger = TriggerBuilder.newTrigger().withIdentity("trigger1", "group1")
++      .startAt(start).endAt(end).withSchedule(scheduleBuilder).build();
++    return trigger;
++  }
++
++
++  @PersistJobDataAfterExecution
++  @DisallowConcurrentExecution
++  public static class TestJob implements Job {
++    @Override
++    public void execute(JobExecutionContext context) throws JobExecutionException {
++      // do nothing
++    }
++  }
++
++
++  // test by subscribing to lens event service
++
++  // test by passing your own notification job - increment the count.
++  @Test
++  public void testAlarmService() {
++    DateTime start = DateTime.now().minusDays(1);
++    DateTime end = DateTime.now();
++    SchedulerJobHandle jobHandle = new SchedulerJobHandle(UUID.randomUUID());
++    XFrequency frequency = new XFrequency();
++    frequency.setTimezone("UTC");
++    frequency.setEnum(XFrequencyEnum.DAILY);
++    alarmService.schedule(start, end, frequency, DateTimeZone.UTC, jobHandle);
++
++  }
++
++  // test for timezone ???
++
++  // test for cron expressions
++
++  // test for enum
++  
++  // test for an invalid cron expression or enum ??
++
++  // validation for cron expression in code while accepting.
++
++  // test that after unschedule the count is not increased.
++
++
++}
+diff --git a/pom.xml b/pom.xml
+index 06cae12..cd344a0 100644
+--- a/pom.xml
++++ b/pom.xml
+@@ -56,6 +56,7 @@
+     <commons.lang.version>2.4</commons.lang.version>
+     <commons.collections.version>3.2.1</commons.collections.version>
+     <joda.time.version>2.0</joda.time.version>
++    <quartz.version>2.2.2</quartz.version>
+     <guava.version>13.0.1</guava.version>
+     <lombok.version>1.16.6</lombok.version>
+     <lombok.maven.plugin.version>1.16.4.1</lombok.maven.plugin.version>
+-- 
+2.1.0
+
