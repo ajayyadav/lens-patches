@@ -1,0 +1,890 @@
+From 280ab9b41263dd7a0882d3e6befbbb50ea37dd61 Mon Sep 17 00:00:00 2001
+From: Ajay Yadava <ajaynsit@gmail.com>
+Date: Mon, 21 Mar 2016 16:41:08 +0530
+Subject: [PATCH] LENS-819 completed.
+
+---
+ .../main/java/org/apache/lens/api/TimeLines.java   |  89 ++++++++++
+ .../apache/lens/cli/commands/LensFactCommands.java |   9 +-
+ .../org/apache/lens/cli/TestLensFactCommands.java  |   2 -
+ .../java/org/apache/lens/client/LensClient.java    |   3 +-
+ .../org/apache/lens/client/LensMetadataClient.java |   5 +-
+ .../lens/cube/metadata/CubeMetastoreClient.java    |  39 ++++-
+ .../timeline/EndsAndHolesPartitionTimeline.java    |  29 +++-
+ .../cube/metadata/timeline/PartitionTimeline.java  |   9 +
+ .../metadata/timeline/RangesPartitionTimeline.java |  41 ++++-
+ .../timeline/StoreAllPartitionTimeline.java        |  44 ++++-
+ .../org/apache/lens/cube/parse/CubeTestSetup.java  |  21 ++-
+ .../server/api/metastore/CubeMetastoreService.java |   3 +-
+ .../server/metastore/CubeMetastoreServiceImpl.java |  11 +-
+ .../lens/server/metastore/MetastoreResource.java   |  11 +-
+ .../server/metastore/TestMetastoreService.java     | 188 ++++++++++++++++++++-
+ 15 files changed, 455 insertions(+), 49 deletions(-)
+ create mode 100644 lens-api/src/main/java/org/apache/lens/api/TimeLines.java
+
+diff --git a/lens-api/src/main/java/org/apache/lens/api/TimeLines.java b/lens-api/src/main/java/org/apache/lens/api/TimeLines.java
+new file mode 100644
+index 0000000..886ad48
+--- /dev/null
++++ b/lens-api/src/main/java/org/apache/lens/api/TimeLines.java
+@@ -0,0 +1,89 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package org.apache.lens.api;
++
++import java.util.List;
++
++import javax.xml.bind.annotation.XmlRootElement;
++
++import lombok.AccessLevel;
++import lombok.AllArgsConstructor;
++import lombok.Data;
++import lombok.Getter;
++import lombok.NoArgsConstructor;
++import lombok.Setter;
++
++
++/**
++ * Class to represent timelines.
++ */
++@XmlRootElement
++/**
++ * Instantiates a new TimeLines instance.
++ */
++@AllArgsConstructor
++/**
++ * Instantiate a new TimeLines instance.
++ */
++@NoArgsConstructor(access = AccessLevel.PROTECTED)
++public class TimeLines {
++
++  @Getter
++  @Setter
++  private List<TimeLine> result;
++
++
++
++  @AllArgsConstructor
++  @Data
++  @NoArgsConstructor(access = AccessLevel.PROTECTED)
++  public static class TimeLine {
++
++    private String storageTableName;
++
++    private String updatePeriod;
++
++    private String partCol;
++
++    private String first;
++
++    private String latest;
++
++    private List<String> holes;
++
++    @Override
++    public String toString() {
++      StringBuilder sb = new StringBuilder();
++      sb.append("TimeLine(storageTableName=" + storageTableName + ", updatePeriod=" + updatePeriod + ", partCol="
++          + partCol + ", first=" + first + ", latest=" + latest + ", holes=");
++      if (holes == null || holes.isEmpty()) {
++        sb.append("[]");
++      } else {
++        for (String s : holes) {
++          sb.append(s);
++          sb.append(", ");
++        }
++        sb.setLength(sb.length() - 2); // remove trailing ", "
++      }
++      return sb.toString();
++    }
++
++  }
++
++}
+diff --git a/lens-cli/src/main/java/org/apache/lens/cli/commands/LensFactCommands.java b/lens-cli/src/main/java/org/apache/lens/cli/commands/LensFactCommands.java
+index 6457bce..5433e6e 100644
+--- a/lens-cli/src/main/java/org/apache/lens/cli/commands/LensFactCommands.java
++++ b/lens-cli/src/main/java/org/apache/lens/cli/commands/LensFactCommands.java
+@@ -19,9 +19,11 @@
+ package org.apache.lens.cli.commands;
+ 
+ import java.io.File;
++import java.util.LinkedList;
+ import java.util.List;
+ 
+ import org.apache.lens.api.APIResult;
++import org.apache.lens.api.TimeLines;
+ import org.apache.lens.api.metastore.XFactTable;
+ import org.apache.lens.api.metastore.XPartition;
+ import org.apache.lens.api.metastore.XStorageTableElement;
+@@ -277,7 +279,12 @@ public class LensFactCommands extends LogicalTableCrudCommand<XFactTable> {
+     @CliOption(key = {"storage_name"}, mandatory = false, help = "<storage_name>") String storageName,
+     @CliOption(key = {"update_period"}, mandatory = false, help = "<update_period>") String updatePeriod,
+     @CliOption(key = {"time_dimension"}, mandatory = false, help = "<time_dimension>") String timeDimension) {
+-    return getClient().getPartitionTimelines(factName, storageName, updatePeriod, timeDimension);
++    List<String> result = new LinkedList<>();
++    for (TimeLines.TimeLine timeLine : getClient().getPartitionTimelines(factName, storageName,
++      updatePeriod, timeDimension)) {
++      result.add(timeLine.toString());
++    }
++    return result;
+   }
+ 
+   @Override
+diff --git a/lens-cli/src/test/java/org/apache/lens/cli/TestLensFactCommands.java b/lens-cli/src/test/java/org/apache/lens/cli/TestLensFactCommands.java
+index 9670d8f..46ac0ba 100644
+--- a/lens-cli/src/test/java/org/apache/lens/cli/TestLensFactCommands.java
++++ b/lens-cli/src/test/java/org/apache/lens/cli/TestLensFactCommands.java
+@@ -281,7 +281,6 @@ public class TestLensFactCommands extends LensCliApplicationTest {
+     List<String> timelines = command.getTimelines("fact1", null, null, null);
+     assertEquals(timelines.size(), 2);
+     for (String timeline : timelines) {
+-      assertTrue(timeline.contains("EndsAndHolesPartitionTimeline"));
+       assertTrue(timeline.contains("first=null"));
+       assertTrue(timeline.contains("latest=null"));
+       assertTrue(timeline.contains("holes=[]"));
+@@ -296,7 +295,6 @@ public class TestLensFactCommands extends LensCliApplicationTest {
+     timelines = command.getTimelines("fact1", null, null, null);
+     assertEquals(timelines.size(), 2);
+     for (String timeline : timelines) {
+-      assertTrue(timeline.contains("EndsAndHolesPartitionTimeline"));
+       if (timeline.contains("DAILY")) {
+         assertTrue(timeline.contains("first=null"));
+         assertTrue(timeline.contains("latest=null"));
+diff --git a/lens-client/src/main/java/org/apache/lens/client/LensClient.java b/lens-client/src/main/java/org/apache/lens/client/LensClient.java
+index ea0cd76..1ea7ebe 100644
+--- a/lens-client/src/main/java/org/apache/lens/client/LensClient.java
++++ b/lens-client/src/main/java/org/apache/lens/client/LensClient.java
+@@ -25,6 +25,7 @@ import java.util.List;
+ import javax.ws.rs.core.Response;
+ 
+ import org.apache.lens.api.APIResult;
++import org.apache.lens.api.TimeLines;
+ import org.apache.lens.api.metastore.*;
+ import org.apache.lens.api.query.*;
+ import org.apache.lens.api.result.LensAPIResult;
+@@ -113,7 +114,7 @@ public class LensClient {
+     return mc.getLatestDateOfCube(cubeName, timePartition);
+   }
+ 
+-  public List<String> getPartitionTimelines(String factName, String storageName, String updatePeriod,
++  public List<TimeLines.TimeLine> getPartitionTimelines(String factName, String storageName, String updatePeriod,
+     String timeDimension) {
+     return mc.getPartitionTimelines(factName, storageName, updatePeriod, timeDimension);
+   }
+diff --git a/lens-client/src/main/java/org/apache/lens/client/LensMetadataClient.java b/lens-client/src/main/java/org/apache/lens/client/LensMetadataClient.java
+index d0f2b57..1f964bb 100644
+--- a/lens-client/src/main/java/org/apache/lens/client/LensMetadataClient.java
++++ b/lens-client/src/main/java/org/apache/lens/client/LensMetadataClient.java
+@@ -31,6 +31,7 @@ import javax.xml.bind.*;
+ import org.apache.lens.api.APIResult;
+ import org.apache.lens.api.DateTime;
+ import org.apache.lens.api.StringList;
++import org.apache.lens.api.TimeLines;
+ import org.apache.lens.api.jaxb.LensJAXBContext;
+ import org.apache.lens.api.metastore.*;
+ 
+@@ -885,7 +886,7 @@ public class LensMetadataClient {
+       .get(DateTime.class).getDate();
+   }
+ 
+-  public List<String> getPartitionTimelines(String factName, String storageName, String updatePeriod,
++  public List<TimeLines.TimeLine> getPartitionTimelines(String factName, String storageName, String updatePeriod,
+     String timeDimension) {
+     return getMetastoreWebTarget().path("facts").path(factName).path("timelines")
+       .queryParam("storage", storageName)
+@@ -893,7 +894,7 @@ public class LensMetadataClient {
+       .queryParam("timeDimension", timeDimension)
+       .queryParam("sessionid", this.connection.getSessionHandle())
+       .request(MediaType.APPLICATION_XML)
+-      .get(StringList.class).getElements();
++      .get(TimeLines.class).getResult();
+   }
+ 
+   private APIResult failureAPIResult(Exception e) {
+diff --git a/lens-cube/src/main/java/org/apache/lens/cube/metadata/CubeMetastoreClient.java b/lens-cube/src/main/java/org/apache/lens/cube/metadata/CubeMetastoreClient.java
+index 02bbbbd..d0d1ee5 100644
+--- a/lens-cube/src/main/java/org/apache/lens/cube/metadata/CubeMetastoreClient.java
++++ b/lens-cube/src/main/java/org/apache/lens/cube/metadata/CubeMetastoreClient.java
+@@ -20,12 +20,35 @@
+ package org.apache.lens.cube.metadata;
+ 
+ import static org.apache.lens.cube.metadata.DateUtil.resolveDate;
+-import static org.apache.lens.cube.metadata.MetastoreUtil.*;
++import static org.apache.lens.cube.metadata.MetastoreUtil.filterPartitionsByNonTimeParts;
++import static org.apache.lens.cube.metadata.MetastoreUtil.filterPartitionsByUpdatePeriod;
++import static org.apache.lens.cube.metadata.MetastoreUtil.getFactOrDimtableStorageTableName;
++import static org.apache.lens.cube.metadata.MetastoreUtil.getLatestPartTimestampKey;
++import static org.apache.lens.cube.metadata.MetastoreUtil.getLatestTimeStampFromPartition;
++import static org.apache.lens.cube.metadata.MetastoreUtil.getParentCubeNameKey;
++import static org.apache.lens.cube.metadata.MetastoreUtil.getPartitionTimelineCachePresenceKey;
++import static org.apache.lens.cube.metadata.MetastoreUtil.getStorageTableName;
+ 
+ import java.text.ParseException;
+-import java.util.*;
++import java.util.ArrayList;
++import java.util.Arrays;
++import java.util.Collection;
++import java.util.Collections;
++import java.util.Comparator;
++import java.util.Date;
++import java.util.HashMap;
++import java.util.HashSet;
++import java.util.Iterator;
++import java.util.LinkedHashMap;
++import java.util.List;
++import java.util.ListIterator;
++import java.util.Map;
++import java.util.Set;
++import java.util.TreeMap;
++import java.util.TreeSet;
+ import java.util.concurrent.ConcurrentHashMap;
+ 
++import org.apache.lens.api.TimeLines;
+ import org.apache.lens.cube.error.LensCubeErrorCode;
+ import org.apache.lens.cube.metadata.Storage.LatestInfo;
+ import org.apache.lens.cube.metadata.Storage.LatestPartColumnInfo;
+@@ -138,11 +161,11 @@ public class CubeMetastoreClient {
+     allHiveTables.clear();
+   }
+ 
+-  public List<PartitionTimeline> getTimelines(String factName, String storage, String updatePeriodStr,
++  public TimeLines getTimelines(String factName, String storage, String updatePeriodStr,
+     String timeDimension)
+     throws LensException, HiveException {
+     UpdatePeriod updatePeriod = updatePeriodStr == null ? null : UpdatePeriod.valueOf(updatePeriodStr.toUpperCase());
+-    List<PartitionTimeline> ret = Lists.newArrayList();
++    List<TimeLines.TimeLine> ret = Lists.newArrayList();
+     CubeFactTable fact = getCubeFact(factName);
+     List<String> keys = Lists.newArrayList();
+     if (storage != null) {
+@@ -167,13 +190,13 @@ public class CubeMetastoreClient {
+         if (updatePeriod == null || entry.getKey().equals(updatePeriod)) {
+           for (Map.Entry<String, PartitionTimeline> entry1 : entry.getValue().entrySet()) {
+             if (partCol == null || partCol.equals(entry1.getKey())) {
+-              ret.add(entry1.getValue());
++              ret.add(entry1.getValue().toTimeLine());
+             }
+           }
+         }
+       }
+     }
+-    return ret;
++    return new TimeLines(ret);
+   }
+ 
+   public void updatePartition(String fact, String storageName, Partition partition)
+@@ -926,7 +949,7 @@ public class CubeMetastoreClient {
+           timeSpecs.get(entry.getKey()).add(entry.getValue());
+         } else {
+           if (!skippedParts.containsKey(entry.getKey())) {
+-            skippedParts.put(entry.getKey(), Sets.<Date>newHashSet(entry.getValue()));
++            skippedParts.put(entry.getKey(), Sets.newHashSet(entry.getValue()));
+           } else {
+             skippedParts.get(entry.getKey()).add(entry.getValue());
+           }
+@@ -2229,7 +2252,7 @@ public class CubeMetastoreClient {
+ 
+   private List<Date> getStorageTimes(String storageTableName, String timeKey) throws HiveException, LensException {
+     Date now = new Date();
+-    List<Date> storageTimes = new ArrayList<Date>();
++    List<Date> storageTimes = new ArrayList<>();
+     String property =  getTable(storageTableName).getProperty(timeKey);
+     if (StringUtils.isNotBlank(property)) {
+       for (String timeStr : property.split("\\s*,\\s*")) {
+diff --git a/lens-cube/src/main/java/org/apache/lens/cube/metadata/timeline/EndsAndHolesPartitionTimeline.java b/lens-cube/src/main/java/org/apache/lens/cube/metadata/timeline/EndsAndHolesPartitionTimeline.java
+index c588dc7..5b1acdc 100644
+--- a/lens-cube/src/main/java/org/apache/lens/cube/metadata/timeline/EndsAndHolesPartitionTimeline.java
++++ b/lens-cube/src/main/java/org/apache/lens/cube/metadata/timeline/EndsAndHolesPartitionTimeline.java
+@@ -19,8 +19,15 @@
+ package org.apache.lens.cube.metadata.timeline;
+ 
+ 
+-import java.util.*;
+-
++import java.util.Date;
++import java.util.HashMap;
++import java.util.Iterator;
++import java.util.LinkedList;
++import java.util.List;
++import java.util.Map;
++import java.util.TreeSet;
++
++import org.apache.lens.api.TimeLines;
+ import org.apache.lens.cube.metadata.MetastoreUtil;
+ import org.apache.lens.cube.metadata.TimePartition;
+ import org.apache.lens.cube.metadata.TimeRange;
+@@ -184,6 +191,24 @@ public class EndsAndHolesPartitionTimeline extends PartitionTimeline {
+   }
+ 
+   @Override
++  public TimeLines.TimeLine toTimeLine() {
++    String fir = null;
++    String last = null;
++    if (first != null) {
++      fir = getUpdatePeriod().format(first.getDate());
++    }
++    if (latest != null) {
++      last = getUpdatePeriod().format(latest.getDate());
++    }
++    List<String> missing = new LinkedList<>();
++    for (TimePartition el : holes) {
++      missing.add(getUpdatePeriod().format(el.getDate()));
++    }
++
++    return new TimeLines.TimeLine(getStorageTableName(), getUpdatePeriod().getName(), getPartCol(), fir, last, missing);
++  }
++
++  @Override
+   public Iterator<TimePartition> iterator() {
+ 
+     return new Iterator<TimePartition>() {
+diff --git a/lens-cube/src/main/java/org/apache/lens/cube/metadata/timeline/PartitionTimeline.java b/lens-cube/src/main/java/org/apache/lens/cube/metadata/timeline/PartitionTimeline.java
+index 1642482..14180ed 100644
+--- a/lens-cube/src/main/java/org/apache/lens/cube/metadata/timeline/PartitionTimeline.java
++++ b/lens-cube/src/main/java/org/apache/lens/cube/metadata/timeline/PartitionTimeline.java
+@@ -21,6 +21,7 @@ package org.apache.lens.cube.metadata.timeline;
+ 
+ import java.util.*;
+ 
++import org.apache.lens.api.TimeLines;
+ import org.apache.lens.cube.metadata.MetastoreUtil;
+ import org.apache.lens.cube.metadata.TimePartition;
+ import org.apache.lens.cube.metadata.TimePartitionRange;
+@@ -220,4 +221,12 @@ public abstract class PartitionTimeline implements Iterable<TimePartition> {
+    * @return
+    */
+   public abstract boolean exists(TimePartition partition);
++
++
++  /**
++   * Helper method to convert to a {@link org.apache.lens.api.TimeLines} object which is returned
++   * as part of the api response.
++   * @return
++   */
++  public abstract TimeLines.TimeLine toTimeLine();
+ }
+diff --git a/lens-cube/src/main/java/org/apache/lens/cube/metadata/timeline/RangesPartitionTimeline.java b/lens-cube/src/main/java/org/apache/lens/cube/metadata/timeline/RangesPartitionTimeline.java
+index 6c9eb7a..c36c2bc 100644
+--- a/lens-cube/src/main/java/org/apache/lens/cube/metadata/timeline/RangesPartitionTimeline.java
++++ b/lens-cube/src/main/java/org/apache/lens/cube/metadata/timeline/RangesPartitionTimeline.java
+@@ -19,11 +19,20 @@
+ package org.apache.lens.cube.metadata.timeline;
+ 
+ 
++import java.util.Calendar;
++import java.util.Date;
+ import java.util.HashMap;
+ import java.util.Iterator;
++import java.util.LinkedList;
++import java.util.List;
+ import java.util.Map;
+ 
+-import org.apache.lens.cube.metadata.*;
++import org.apache.lens.api.TimeLines;
++import org.apache.lens.cube.metadata.MetastoreUtil;
++import org.apache.lens.cube.metadata.TimePartition;
++import org.apache.lens.cube.metadata.TimePartitionRange;
++import org.apache.lens.cube.metadata.TimePartitionRangeList;
++import org.apache.lens.cube.metadata.UpdatePeriod;
+ import org.apache.lens.server.api.error.LensException;
+ 
+ import com.google.common.base.Strings;
+@@ -234,6 +243,36 @@ public class RangesPartitionTimeline extends PartitionTimeline {
+   }
+ 
+   @Override
++  public TimeLines.TimeLine toTimeLine() {
++    List<String> holes = new LinkedList<>();
++    String first = null;
++    String last = null;
++    if (!ranges.isEmpty()) {
++      first = getUpdatePeriod().format(ranges.get(0).getBegin().getDate());
++      last = getUpdatePeriod().format(ranges.get(ranges.size() -1).getEnd().getDate());
++
++      Calendar calendar = Calendar.getInstance();
++      calendar.setTime(ranges.get(0).getEnd().getDate());
++      calendar.add(getUpdatePeriod().calendarField(), 1);
++      Date prev = calendar.getTime();
++      for (int i = 1; i < ranges.size(); i++) {
++        Date next = ranges.get(i).getBegin().getDate();
++        while (prev.before(next)) { // add all from (prevRange.end + 1) till currentRange.begin
++          holes.add(getUpdatePeriod().format(prev));
++          calendar.setTime(prev);
++          calendar.add(getUpdatePeriod().calendarField(), 1);
++          prev = calendar.getTime(); // make prev as next instance
++        }
++        // set prev to current end + 1
++        calendar.setTime(ranges.get(i).getEnd().getDate());
++        calendar.add(getUpdatePeriod().calendarField(), 1);
++        prev = calendar.getTime();
++      }
++    }
++    return new TimeLines.TimeLine(getStorageTableName(), getUpdatePeriod().getName(), getPartCol(), first, last, holes);
++  }
++
++  @Override
+   public Iterator<TimePartition> iterator() {
+ 
+     return new Iterator<TimePartition>() {
+diff --git a/lens-cube/src/main/java/org/apache/lens/cube/metadata/timeline/StoreAllPartitionTimeline.java b/lens-cube/src/main/java/org/apache/lens/cube/metadata/timeline/StoreAllPartitionTimeline.java
+index a6cb8da..887bf12 100644
+--- a/lens-cube/src/main/java/org/apache/lens/cube/metadata/timeline/StoreAllPartitionTimeline.java
++++ b/lens-cube/src/main/java/org/apache/lens/cube/metadata/timeline/StoreAllPartitionTimeline.java
+@@ -18,8 +18,17 @@
+  */
+ package org.apache.lens.cube.metadata.timeline;
+ 
+-import java.util.*;
+-
++import java.util.Calendar;
++import java.util.Collection;
++import java.util.Date;
++import java.util.HashMap;
++import java.util.Iterator;
++import java.util.LinkedList;
++import java.util.List;
++import java.util.Map;
++import java.util.TreeSet;
++
++import org.apache.lens.api.TimeLines;
+ import org.apache.lens.cube.metadata.MetastoreUtil;
+ import org.apache.lens.cube.metadata.TimePartition;
+ import org.apache.lens.cube.metadata.UpdatePeriod;
+@@ -106,6 +115,37 @@ public class StoreAllPartitionTimeline extends PartitionTimeline {
+   }
+ 
+   @Override
++  public TimeLines.TimeLine toTimeLine() {
++    TreeSet<Date> availableDates = new TreeSet<>();
++    for (TimePartition el : allPartitions) {
++      availableDates.add(el.getDate());
++    }
++
++    List<String> holes = new LinkedList<>();
++    Date first = null;
++    Date last = null;
++    if (!allPartitions.isEmpty()) {
++      TreeSet<Date> allDates = new TreeSet<>();
++      first = allPartitions.first().getDate();
++      last = allPartitions.last().getDate();
++      Calendar calendar = Calendar.getInstance();
++      calendar.setTime(first);
++      for (Date start = availableDates.first(); start.before(availableDates.last());) {
++        allDates.add(start);
++        calendar.add(getUpdatePeriod().calendarField(), 1);
++        start = calendar.getTime();
++      }
++
++      allDates.removeAll(availableDates);
++      for (Date date : allDates) {
++        holes.add(getUpdatePeriod().format(date));
++      }
++    }
++    return new TimeLines.TimeLine(getStorageTableName(), getUpdatePeriod().getName(), getPartCol(),
++      getUpdatePeriod().format(first), getUpdatePeriod().format(last), holes);
++  }
++
++  @Override
+   public Iterator<TimePartition> iterator() {
+     return getAllPartitions().iterator();
+   }
+diff --git a/lens-cube/src/test/java/org/apache/lens/cube/parse/CubeTestSetup.java b/lens-cube/src/test/java/org/apache/lens/cube/parse/CubeTestSetup.java
+index 42decc6..c6290a5 100644
+--- a/lens-cube/src/test/java/org/apache/lens/cube/parse/CubeTestSetup.java
++++ b/lens-cube/src/test/java/org/apache/lens/cube/parse/CubeTestSetup.java
+@@ -29,6 +29,7 @@ import static org.testng.Assert.*;
+ 
+ import java.util.*;
+ 
++import org.apache.lens.api.TimeLines;
+ import org.apache.lens.cube.metadata.*;
+ import org.apache.lens.cube.metadata.ExprColumn.ExprSpec;
+ import org.apache.lens.cube.metadata.ReferencedDimAttribute.ChainRefCol;
+@@ -1476,22 +1477,30 @@ public class CubeTestSetup {
+   }
+ 
+   private void assertTimeline(CubeMetastoreClient client, String factName, String storageName,
+-    UpdatePeriod updatePeriod, String timeDim, PartitionTimeline expectedTimeline)
+-    throws Exception {
++    UpdatePeriod updatePeriod, String timeDim, PartitionTimeline expectedTimeline) throws Exception {
+     assertNotNull(factName);
+     assertNotNull(storageName);
+     assertNotNull(updatePeriod);
+     assertNotNull(timeDim);
+     String storageTableName = MetastoreUtil.getFactOrDimtableStorageTableName(factName, storageName);
+-    List<PartitionTimeline> timelines = client.getTimelines(factName, storageName, updatePeriod.name(), timeDim);
++    List<TimeLines.TimeLine> timelines = client.getTimelines(factName, storageName, updatePeriod.name(),
++      timeDim).getResult();
+     assertEquals(timelines.size(), 1);
+-    PartitionTimeline actualTimeline = timelines.get(0);
+-    assertEquals(actualTimeline, expectedTimeline);
++    assertEqualTimeLine(timelines, expectedTimeline, updatePeriod);
+     assertEquals(client.getTable(storageTableName).getParameters()
+       .get(MetastoreUtil.getPartitionTimelineStorageClassKey(updatePeriod,
+         timeDim)), expectedTimeline.getClass().getCanonicalName());
+     expectedTimeline.init(client.getTable(MetastoreUtil.getFactOrDimtableStorageTableName(factName, storageName)));
+-    assertEquals(actualTimeline, expectedTimeline);
++    assertEqualTimeLine(timelines, expectedTimeline, updatePeriod);
++  }
++
++  private void assertEqualTimeLine(List<TimeLines.TimeLine> timelines, PartitionTimeline expectedTimeline,
++                                   UpdatePeriod updatePeriod) {
++    if (expectedTimeline.getLatestDate() != null) {
++      assertEquals(timelines.get(0).getLatest(), updatePeriod.format(expectedTimeline.getLatestDate()));
++    } else {
++      assertNull(timelines.get(0).getLatest());
++    }
+   }
+ 
+   private void assertTimeline(CubeMetastoreClient client, String factName, String storageName,
+diff --git a/lens-server-api/src/main/java/org/apache/lens/server/api/metastore/CubeMetastoreService.java b/lens-server-api/src/main/java/org/apache/lens/server/api/metastore/CubeMetastoreService.java
+index c11fd83..a0cbfa4 100644
+--- a/lens-server-api/src/main/java/org/apache/lens/server/api/metastore/CubeMetastoreService.java
++++ b/lens-server-api/src/main/java/org/apache/lens/server/api/metastore/CubeMetastoreService.java
+@@ -22,6 +22,7 @@ import java.util.Date;
+ import java.util.List;
+ 
+ import org.apache.lens.api.LensSessionHandle;
++import org.apache.lens.api.TimeLines;
+ import org.apache.lens.api.metastore.*;
+ import org.apache.lens.server.api.LensService;
+ import org.apache.lens.server.api.error.LensException;
+@@ -560,7 +561,7 @@ public interface CubeMetastoreService extends LensService {
+   Date getLatestDateOfCube(LensSessionHandle sessionid, String cubeName, String timeDimension)
+     throws LensException, HiveException;
+ 
+-  List<String> getPartitionTimelines(LensSessionHandle sessionid, String factName, String storage,
++  TimeLines getPartitionTimelines(LensSessionHandle sessionid, String factName, String storage,
+     String updatePeriod, String timeDimension) throws LensException, HiveException;
+ 
+   XJoinChains getAllJoinChains(LensSessionHandle sessionid, String table) throws LensException;
+diff --git a/lens-server/src/main/java/org/apache/lens/server/metastore/CubeMetastoreServiceImpl.java b/lens-server/src/main/java/org/apache/lens/server/metastore/CubeMetastoreServiceImpl.java
+index a1acd1a..4fec587 100644
+--- a/lens-server/src/main/java/org/apache/lens/server/metastore/CubeMetastoreServiceImpl.java
++++ b/lens-server/src/main/java/org/apache/lens/server/metastore/CubeMetastoreServiceImpl.java
+@@ -26,9 +26,9 @@ import javax.ws.rs.BadRequestException;
+ import javax.ws.rs.NotFoundException;
+ 
+ import org.apache.lens.api.LensSessionHandle;
++import org.apache.lens.api.TimeLines;
+ import org.apache.lens.api.metastore.*;
+ import org.apache.lens.cube.metadata.*;
+-import org.apache.lens.cube.metadata.timeline.PartitionTimeline;
+ import org.apache.lens.server.BaseLensService;
+ import org.apache.lens.server.LensServerConf;
+ import org.apache.lens.server.api.LensConfConstants;
+@@ -47,7 +47,6 @@ import org.apache.hadoop.hive.ql.metadata.Partition;
+ import org.apache.hadoop.hive.ql.metadata.Table;
+ import org.apache.hive.service.cli.CLIService;
+ 
+-import com.google.common.collect.Lists;
+ import lombok.extern.slf4j.Slf4j;
+ 
+ @Slf4j
+@@ -1394,16 +1393,12 @@ public class CubeMetastoreServiceImpl extends BaseLensService implements CubeMet
+     return latest;
+   }
+ 
+-  public List<String> getPartitionTimelines(LensSessionHandle sessionid, String factName, String storage,
++  public TimeLines getPartitionTimelines(LensSessionHandle sessionid, String factName, String storage,
+     String updatePeriod, String timeDimension) throws LensException, HiveException {
+     acquire(sessionid);
+     try {
+       CubeMetastoreClient client = getClient(sessionid);
+-      List<String> ret = Lists.newArrayList();
+-      for (PartitionTimeline timeline : client.getTimelines(factName, storage, updatePeriod, timeDimension)) {
+-        ret.add(timeline.toString());
+-      }
+-      return ret;
++      return client.getTimelines(factName, storage, updatePeriod, timeDimension);
+     } finally {
+       release(sessionid);
+     }
+diff --git a/lens-server/src/main/java/org/apache/lens/server/metastore/MetastoreResource.java b/lens-server/src/main/java/org/apache/lens/server/metastore/MetastoreResource.java
+index 684e2ed..3ad3f49 100644
+--- a/lens-server/src/main/java/org/apache/lens/server/metastore/MetastoreResource.java
++++ b/lens-server/src/main/java/org/apache/lens/server/metastore/MetastoreResource.java
+@@ -26,11 +26,8 @@ import javax.ws.rs.*;
+ import javax.ws.rs.core.MediaType;
+ import javax.xml.bind.JAXBElement;
+ 
+-import org.apache.lens.api.APIResult;
++import org.apache.lens.api.*;
+ import org.apache.lens.api.APIResult.*;
+-import org.apache.lens.api.DateTime;
+-import org.apache.lens.api.LensSessionHandle;
+-import org.apache.lens.api.StringList;
+ import org.apache.lens.api.metastore.*;
+ import org.apache.lens.server.LensServices;
+ import org.apache.lens.server.api.error.LensException;
+@@ -1686,14 +1683,14 @@ public class MetastoreResource {
+    */
+   @GET
+   @Path("/facts/{factName}/timelines")
+-  public StringList getPartitionTimelines(@QueryParam("sessionid") LensSessionHandle sessionid,
++  public TimeLines getPartitionTimelines(@QueryParam("sessionid") LensSessionHandle sessionid,
+     @PathParam("factName") String factName, @QueryParam("storage") String storage,
+     @QueryParam("updatePeriod") String updatePeriod, @QueryParam("timeDimension") String timeDimension)
+     throws LensException, HiveException {
+     checkSessionId(sessionid);
+     try {
+-      return new StringList(getSvc().getPartitionTimelines(sessionid, factName, storage,
+-        updatePeriod, timeDimension));
++      return getSvc().getPartitionTimelines(sessionid, factName, storage,
++        updatePeriod, timeDimension);
+     } catch (LensException exc) {
+       checkTableNotFound(exc, factName);
+       log.error("Error finding partition timelines for fact: {}", factName, exc);
+diff --git a/lens-server/src/test/java/org/apache/lens/server/metastore/TestMetastoreService.java b/lens-server/src/test/java/org/apache/lens/server/metastore/TestMetastoreService.java
+index 3b091f5..e1ad4ee 100644
+--- a/lens-server/src/test/java/org/apache/lens/server/metastore/TestMetastoreService.java
++++ b/lens-server/src/test/java/org/apache/lens/server/metastore/TestMetastoreService.java
+@@ -18,18 +18,39 @@
+  */
+ package org.apache.lens.server.metastore;
+ 
+-import static org.apache.lens.cube.metadata.UpdatePeriod.*;
++import static org.apache.lens.cube.metadata.UpdatePeriod.DAILY;
++import static org.apache.lens.cube.metadata.UpdatePeriod.HOURLY;
++import static org.apache.lens.cube.metadata.UpdatePeriod.MONTHLY;
+ 
+-import static org.testng.Assert.*;
++import static org.testng.Assert.assertEquals;
++import static org.testng.Assert.assertFalse;
++import static org.testng.Assert.assertNotNull;
++import static org.testng.Assert.assertNull;
++import static org.testng.Assert.assertTrue;
++import static org.testng.Assert.fail;
+ 
+ import java.io.File;
+-import java.util.*;
++import java.util.Arrays;
++import java.util.Calendar;
++import java.util.Collections;
++import java.util.Date;
++import java.util.GregorianCalendar;
++import java.util.HashMap;
++import java.util.HashSet;
++import java.util.Iterator;
++import java.util.List;
++import java.util.Map;
++import java.util.Set;
+ 
+ import javax.ws.rs.BadRequestException;
+ import javax.ws.rs.NotFoundException;
+ import javax.ws.rs.client.Entity;
+ import javax.ws.rs.client.WebTarget;
+-import javax.ws.rs.core.*;
++import javax.ws.rs.core.Application;
++import javax.ws.rs.core.GenericEntity;
++import javax.ws.rs.core.GenericType;
++import javax.ws.rs.core.MediaType;
++import javax.ws.rs.core.Response;
+ import javax.xml.bind.JAXBElement;
+ import javax.xml.datatype.DatatypeFactory;
+ import javax.xml.datatype.XMLGregorianCalendar;
+@@ -39,12 +60,74 @@ import org.apache.lens.api.APIResult.Status;
+ import org.apache.lens.api.DateTime;
+ import org.apache.lens.api.LensSessionHandle;
+ import org.apache.lens.api.StringList;
++import org.apache.lens.api.TimeLines;
+ import org.apache.lens.api.error.LensCommonErrorCode;
+-import org.apache.lens.api.metastore.*;
+ import org.apache.lens.api.metastore.ObjectFactory;
++import org.apache.lens.api.metastore.XBaseCube;
++import org.apache.lens.api.metastore.XChainColumn;
++import org.apache.lens.api.metastore.XColumn;
++import org.apache.lens.api.metastore.XColumns;
++import org.apache.lens.api.metastore.XCube;
++import org.apache.lens.api.metastore.XDerivedCube;
++import org.apache.lens.api.metastore.XDimAttrNames;
++import org.apache.lens.api.metastore.XDimAttribute;
++import org.apache.lens.api.metastore.XDimAttributes;
++import org.apache.lens.api.metastore.XDimension;
++import org.apache.lens.api.metastore.XDimensionTable;
++import org.apache.lens.api.metastore.XExprColumn;
++import org.apache.lens.api.metastore.XExprSpec;
++import org.apache.lens.api.metastore.XExpressions;
++import org.apache.lens.api.metastore.XFactTable;
++import org.apache.lens.api.metastore.XFlattenedColumn;
++import org.apache.lens.api.metastore.XFlattenedColumns;
++import org.apache.lens.api.metastore.XJoinChain;
++import org.apache.lens.api.metastore.XJoinChains;
++import org.apache.lens.api.metastore.XJoinEdge;
++import org.apache.lens.api.metastore.XJoinEdges;
++import org.apache.lens.api.metastore.XJoinPath;
++import org.apache.lens.api.metastore.XJoinPaths;
++import org.apache.lens.api.metastore.XMeasure;
++import org.apache.lens.api.metastore.XMeasureNames;
++import org.apache.lens.api.metastore.XMeasureType;
++import org.apache.lens.api.metastore.XMeasures;
++import org.apache.lens.api.metastore.XNativeTable;
++import org.apache.lens.api.metastore.XPartSpec;
++import org.apache.lens.api.metastore.XPartSpecElement;
++import org.apache.lens.api.metastore.XPartition;
++import org.apache.lens.api.metastore.XPartitionList;
++import org.apache.lens.api.metastore.XProperties;
++import org.apache.lens.api.metastore.XProperty;
++import org.apache.lens.api.metastore.XStorage;
++import org.apache.lens.api.metastore.XStorageTableDesc;
++import org.apache.lens.api.metastore.XStorageTableElement;
++import org.apache.lens.api.metastore.XStorageTables;
++import org.apache.lens.api.metastore.XTableReference;
++import org.apache.lens.api.metastore.XTimePartSpec;
++import org.apache.lens.api.metastore.XTimePartSpecElement;
++import org.apache.lens.api.metastore.XUpdatePeriod;
++import org.apache.lens.api.metastore.XUpdatePeriods;
+ import org.apache.lens.api.result.LensAPIResult;
+-import org.apache.lens.cube.metadata.*;
++import org.apache.lens.cube.metadata.AbstractCubeTable;
++import org.apache.lens.cube.metadata.BaseDimAttribute;
++import org.apache.lens.cube.metadata.ColumnMeasure;
++import org.apache.lens.cube.metadata.Cube;
++import org.apache.lens.cube.metadata.CubeDimensionTable;
++import org.apache.lens.cube.metadata.CubeFactTable;
++import org.apache.lens.cube.metadata.CubeInterface;
++import org.apache.lens.cube.metadata.CubeMeasure;
++import org.apache.lens.cube.metadata.CubeTableType;
++import org.apache.lens.cube.metadata.DerivedCube;
++import org.apache.lens.cube.metadata.Dimension;
++import org.apache.lens.cube.metadata.ExprColumn;
+ import org.apache.lens.cube.metadata.ExprColumn.ExprSpec;
++import org.apache.lens.cube.metadata.HDFSStorage;
++import org.apache.lens.cube.metadata.HierarchicalDimAttribute;
++import org.apache.lens.cube.metadata.JoinChain;
++import org.apache.lens.cube.metadata.MetastoreConstants;
++import org.apache.lens.cube.metadata.MetastoreUtil;
++import org.apache.lens.cube.metadata.ReferencedDimAttribute;
++import org.apache.lens.cube.metadata.TableReference;
++import org.apache.lens.cube.metadata.UpdatePeriod;
+ import org.apache.lens.server.LensJerseyTest;
+ import org.apache.lens.server.LensServerTestUtil;
+ import org.apache.lens.server.LensServices;
+@@ -61,9 +144,10 @@ import org.apache.hadoop.hive.ql.session.SessionState;
+ import org.apache.hadoop.mapred.SequenceFileInputFormat;
+ 
+ import org.glassfish.jersey.test.TestProperties;
+-
+ import org.testng.Assert;
+-import org.testng.annotations.*;
++import org.testng.annotations.AfterMethod;
++import org.testng.annotations.BeforeMethod;
++import org.testng.annotations.Test;
+ 
+ import com.google.common.collect.Lists;
+ import com.google.common.collect.Sets;
+@@ -2092,6 +2176,94 @@ public class TestMetastoreService extends LensJerseyTest {
+   }
+ 
+ 
++  @Test(dataProvider = "mediaTypeData")
++  public void testPartitionTimelines(MediaType mediaType) throws Exception {
++    final String table = "testFactStoragePartitionTimeLines";
++    final String DB = dbPFX + "testPartitionTimeLinesDB" + mediaType.getSubtype();
++    String prevDb = getCurrentDatabase(mediaType);
++    createDatabase(DB, mediaType);
++    setCurrentDatabase(DB, mediaType);
++    // create a storage
++    createStorage("S1", mediaType);
++
++    try {
++      // create a cube
++      final XCube cube = createTestCube("testCube");
++      target().path("metastore").path("cubes").queryParam("sessionid", lensSessionId).request(mediaType)
++        .post(Entity.entity(new GenericEntity<JAXBElement<XCube>>(cubeObjectFactory.createXCube(cube)) {
++          }, mediaType),
++          APIResult.class);
++
++      // create a fact table
++      XFactTable f = createFactTable(table);
++      f.getStorageTables().getStorageTable().add(createStorageTblElement("S1", table, "HOURLY"));
++      f.getStorageTables().getStorageTable().add(createStorageTblElement("S1", table, "DAILY"));
++      f.getStorageTables().getStorageTable().add(createStorageTblElement("S1", table, "HOURLY"));
++      APIResult result = target()
++        .path("metastore")
++        .path("facts").queryParam("sessionid", lensSessionId)
++        .request(mediaType)
++        .post(Entity.entity(
++            new GenericEntity<JAXBElement<XFactTable>>(cubeObjectFactory.createXFactTable(f)) {
++            }, mediaType),
++          APIResult.class);
++      assertSuccess(result);
++
++
++      // Add a partition
++      final Date firstPartDate = new Date();
++
++      // add an hour for another partition - we will use it as hole
++      Calendar cal = Calendar.getInstance();
++      cal.setTime(firstPartDate);
++      cal.add(Calendar.HOUR_OF_DAY, 1);
++      final Date missingPartDate = cal.getTime();
++
++      // add an hour to get next partition and create it
++      cal.add(Calendar.HOUR_OF_DAY, 1);
++      final Date lastPartDate = cal.getTime();
++
++      // create first partition
++      XPartition xp = createPartition(table, firstPartDate);
++      APIResult partAddResult = target().path("metastore/facts/").path(table).path("storages/S1/partition")
++        .queryParam("sessionid", lensSessionId).request(mediaType)
++        .post(Entity.entity(new GenericEntity<JAXBElement<XPartition>>(cubeObjectFactory.createXPartition(xp)){},
++          mediaType), APIResult.class);
++      assertSuccess(partAddResult);
++
++      // create last partition
++      xp = createPartition(table, lastPartDate);
++      partAddResult = target().path("metastore/facts/").path(table).path("storages/S1/partition")
++        .queryParam("sessionid", lensSessionId).request(mediaType)
++        .post(Entity.entity(new GenericEntity<JAXBElement<XPartition>>(cubeObjectFactory.createXPartition(xp)){},
++          mediaType), APIResult.class);
++      assertSuccess(partAddResult);
++
++      // sessionid, storage, updatePeriod, timeDimension
++      TimeLines timeLinesResult = target().path("metastore/facts/").path(table).path("timelines")
++        .queryParam("sessionid", lensSessionId).queryParam("storage", "S1").queryParam("updatePeriod", "HOURLY")
++        .request(mediaType)
++        .get(TimeLines.class);
++      String expectedFirst = UpdatePeriod.HOURLY.format(firstPartDate);
++      String expectedLast = UpdatePeriod.HOURLY.format(lastPartDate);
++      String expectedHole = UpdatePeriod.HOURLY.format(missingPartDate);
++      TimeLines.TimeLine actual = timeLinesResult.getResult().get(0);
++
++      // assert storageTableName, partitionCol, updatePeriod, first, last and holes
++      assertEquals(actual.getStorageTableName(), "s1_testfactstoragepartitiontimelines");
++      assertEquals(actual.getUpdatePeriod(), "HOURLY");
++      assertEquals(actual.getPartCol(), "dt");
++      assertEquals(actual.getFirst(), expectedFirst);
++      assertEquals(actual.getLatest(), expectedLast);
++      assertEquals(actual.getHoles().size(), 1);
++      assertEquals(actual.getHoles().get(0), expectedHole);
++
++    } finally {
++      setCurrentDatabase(prevDb, mediaType);
++      dropDatabase(DB, mediaType);
++    }
++  }
++
+   @SuppressWarnings("deprecation")
+   @Test(dataProvider = "mediaTypeData")
+   public void testFactStoragePartitions(MediaType mediaType) throws Exception {
+-- 
+2.1.0
+
