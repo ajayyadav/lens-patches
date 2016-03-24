@@ -1,4 +1,4 @@
-From fd59fbf6626d47ffe2b64ae4ccfff3c8e97f31f7 Mon Sep 17 00:00:00 2001
+From deaa5bd8d0f831f29fc035961b3a81db680fd054 Mon Sep 17 00:00:00 2001
 From: Ajay Yadava <ajaynsit@gmail.com>
 Date: Mon, 21 Mar 2016 20:40:54 +0530
 Subject: [PATCH] LENS-987 Alarm Service for scheduling time based queries.
@@ -7,11 +7,11 @@ Subject: [PATCH] LENS-987 Alarm Service for scheduling time based queries.
  lens-server-api/pom.xml                            |   4 +
  .../server/api/events/SchedulerAlarmEvent.java     |  51 ++++++
  lens-server/pom.xml                                |   5 +
- .../java/org/apache/lens/server/LensServices.java  |  32 +++-
- .../notification/services/AlarmService.java        | 203 +++++++++++++++++++++
- .../notification/services/AlarmServiceTest.java    | 197 ++++++++++++++++++++
+ .../java/org/apache/lens/server/LensServices.java  |   7 +-
+ .../notification/services/AlarmService.java        | 190 +++++++++++++++++++++
+ .../notification/services/AlarmServiceTest.java    | 183 ++++++++++++++++++++
  pom.xml                                            |   1 +
- 7 files changed, 489 insertions(+), 4 deletions(-)
+ 7 files changed, 440 insertions(+), 1 deletion(-)
  create mode 100644 lens-server-api/src/main/java/org/apache/lens/server/api/events/SchedulerAlarmEvent.java
  create mode 100644 lens-server/src/main/java/org/apache/lens/server/scheduler/notification/services/AlarmService.java
  create mode 100644 lens-server/src/test/java/org/apache/lens/server/scheduler/notification/services/AlarmServiceTest.java
@@ -104,48 +104,22 @@ index 75b8b32..f8bba1f 100644
        <artifactId>lens-server-api</artifactId>
        <type>test-jar</type>
 diff --git a/lens-server/src/main/java/org/apache/lens/server/LensServices.java b/lens-server/src/main/java/org/apache/lens/server/LensServices.java
-index 48b3e00..21ab5d8 100644
+index 48b3e00..0ccd801 100644
 --- a/lens-server/src/main/java/org/apache/lens/server/LensServices.java
 +++ b/lens-server/src/main/java/org/apache/lens/server/LensServices.java
-@@ -18,11 +18,33 @@
-  */
- package org.apache.lens.server;
+@@ -20,7 +20,10 @@ package org.apache.lens.server;
  
--import static org.apache.lens.server.api.LensConfConstants.*;
--
+ import static org.apache.lens.server.api.LensConfConstants.*;
+ 
 -import java.io.*;
-+import static org.apache.lens.server.api.LensConfConstants.DEFAULT_SERVER_MODE;
-+import static org.apache.lens.server.api.LensConfConstants.DEFAULT_SERVER_RECOVER_ON_RESTART;
-+import static org.apache.lens.server.api.LensConfConstants.DEFAULT_SERVER_RESTART_ENABLED;
-+import static org.apache.lens.server.api.LensConfConstants.DEFAULT_SERVER_SNAPSHOT_INTERVAL;
-+import static org.apache.lens.server.api.LensConfConstants.DEFAULT_SERVER_STATE_PERSIST_LOCATION;
-+import static org.apache.lens.server.api.LensConfConstants.DEFAULT_STATE_PERSIST_OUT_STREAM_BUFF_SIZE;
-+import static org.apache.lens.server.api.LensConfConstants.SERVER_MODE;
-+import static org.apache.lens.server.api.LensConfConstants.SERVER_RECOVER_ON_RESTART;
-+import static org.apache.lens.server.api.LensConfConstants.SERVER_RESTART_ENABLED;
-+import static org.apache.lens.server.api.LensConfConstants.SERVER_SNAPSHOT_INTERVAL;
-+import static org.apache.lens.server.api.LensConfConstants.SERVER_STATE_PERSIST_LOCATION;
-+import static org.apache.lens.server.api.LensConfConstants.SERVICE_NAMES;
-+import static org.apache.lens.server.api.LensConfConstants.STATE_PERSIST_OUT_STREAM_BUFF_SIZE;
-+import static org.apache.lens.server.api.LensConfConstants.getServiceImplConfKey;
-+
 +import java.io.FileNotFoundException;
 +import java.io.IOException;
 +import java.io.ObjectInputStream;
 +import java.io.ObjectOutputStream;
  import java.lang.reflect.Constructor;
--import java.util.*;
-+import java.util.ArrayList;
-+import java.util.LinkedHashMap;
-+import java.util.List;
-+import java.util.Map;
-+import java.util.Timer;
-+import java.util.TimerTask;
-+import java.util.UUID;
+ import java.util.*;
  
- import org.apache.lens.api.error.ErrorCollection;
- import org.apache.lens.api.error.ErrorCollectionFactory;
-@@ -32,6 +54,7 @@ import org.apache.lens.server.api.metrics.MetricsService;
+@@ -32,6 +35,7 @@ import org.apache.lens.server.api.metrics.MetricsService;
  import org.apache.lens.server.metrics.MetricsServiceImpl;
  import org.apache.lens.server.model.LogSegregationContext;
  import org.apache.lens.server.model.MappedDiagnosticLogSegregationContext;
@@ -153,7 +127,7 @@ index 48b3e00..21ab5d8 100644
  import org.apache.lens.server.session.LensSessionImpl;
  import org.apache.lens.server.stats.StatisticsService;
  import org.apache.lens.server.user.UserConfigLoaderFactory;
-@@ -187,6 +210,7 @@ public class LensServices extends CompositeService implements ServiceProvider {
+@@ -187,6 +191,7 @@ public class LensServices extends CompositeService implements ServiceProvider {
        UserConfigLoaderFactory.init(conf);
        // Add default services
        addService(cliService);
@@ -163,10 +137,10 @@ index 48b3e00..21ab5d8 100644
        addService(new StatisticsService(StatisticsService.STATS_SVC_NAME));
 diff --git a/lens-server/src/main/java/org/apache/lens/server/scheduler/notification/services/AlarmService.java b/lens-server/src/main/java/org/apache/lens/server/scheduler/notification/services/AlarmService.java
 new file mode 100644
-index 0000000..9d0919e
+index 0000000..7da4ad7
 --- /dev/null
 +++ b/lens-server/src/main/java/org/apache/lens/server/scheduler/notification/services/AlarmService.java
-@@ -0,0 +1,203 @@
+@@ -0,0 +1,190 @@
 +/**
 + * Licensed to the Apache Software Foundation (ASF) under one
 + * or more contributor license agreements.  See the NOTICE file
@@ -201,20 +175,7 @@ index 0000000..9d0919e
 +import org.apache.hive.service.AbstractService;
 +
 +import org.joda.time.DateTime;
-+import org.quartz.CalendarIntervalScheduleBuilder;
-+import org.quartz.CronScheduleBuilder;
-+import org.quartz.DateBuilder;
-+import org.quartz.Job;
-+import org.quartz.JobBuilder;
-+import org.quartz.JobDataMap;
-+import org.quartz.JobDetail;
-+import org.quartz.JobExecutionContext;
-+import org.quartz.JobExecutionException;
-+import org.quartz.JobKey;
-+import org.quartz.Scheduler;
-+import org.quartz.SchedulerException;
-+import org.quartz.Trigger;
-+import org.quartz.TriggerBuilder;
++import org.quartz.*;
 +import org.quartz.impl.StdSchedulerFactory;
 +
 +import lombok.extern.slf4j.Slf4j;
@@ -372,10 +333,10 @@ index 0000000..9d0919e
 +}
 diff --git a/lens-server/src/test/java/org/apache/lens/server/scheduler/notification/services/AlarmServiceTest.java b/lens-server/src/test/java/org/apache/lens/server/scheduler/notification/services/AlarmServiceTest.java
 new file mode 100644
-index 0000000..2c16ed3
+index 0000000..2bb1e1f
 --- /dev/null
 +++ b/lens-server/src/test/java/org/apache/lens/server/scheduler/notification/services/AlarmServiceTest.java
-@@ -0,0 +1,197 @@
+@@ -0,0 +1,183 @@
 +/**
 + * Licensed to the Apache Software Foundation (ASF) under one
 + * or more contributor license agreements.  See the NOTICE file
@@ -399,12 +360,7 @@ index 0000000..2c16ed3
 +import static org.testng.Assert.assertNotNull;
 +import static org.testng.Assert.assertTrue;
 +
-+import java.util.Date;
-+import java.util.HashSet;
-+import java.util.LinkedList;
-+import java.util.List;
-+import java.util.Set;
-+import java.util.UUID;
++import java.util.*;
 +
 +import org.apache.lens.api.query.SchedulerJobHandle;
 +import org.apache.lens.api.scheduler.XFrequency;
@@ -420,26 +376,12 @@ index 0000000..2c16ed3
 +import org.joda.time.DateTime;
 +import org.joda.time.format.DateTimeFormat;
 +import org.joda.time.format.DateTimeFormatter;
-+import org.quartz.CalendarIntervalScheduleBuilder;
-+import org.quartz.DateBuilder;
-+import org.quartz.DisallowConcurrentExecution;
-+import org.quartz.Job;
-+import org.quartz.JobBuilder;
-+import org.quartz.JobDetail;
-+import org.quartz.JobExecutionContext;
-+import org.quartz.JobExecutionException;
-+import org.quartz.PersistJobDataAfterExecution;
-+import org.quartz.Scheduler;
-+import org.quartz.SchedulerException;
-+import org.quartz.SchedulerFactory;
-+import org.quartz.SchedulerMetaData;
-+import org.quartz.Trigger;
-+import org.quartz.TriggerBuilder;
++import org.quartz.*;
 +import org.quartz.impl.StdSchedulerFactory;
 +import org.testng.Assert;
 +import org.testng.annotations.AfterClass;
 +import org.testng.annotations.BeforeClass;
-+import org.testng.annotations.BeforeTest;
++import org.testng.annotations.BeforeMethod;
 +import org.testng.annotations.Test;
 +
 +/**
@@ -453,6 +395,8 @@ index 0000000..2c16ed3
 +
 +  private static List<SchedulerAlarmEvent> events = new LinkedList<>();
 +
++  private static volatile int counter = 0;
++
 +  private final LensEventListener<SchedulerAlarmEvent> alarmEventListener = new
 +    LensEventListener<SchedulerAlarmEvent>() {
 +
@@ -462,9 +406,9 @@ index 0000000..2c16ed3
 +    }
 +  };
 +
-+  @BeforeTest
++  @BeforeMethod
 +  public void initializeEventsList() {
-+    events.clear();
++    events = new LinkedList<>();
 +  }
 +
 +  @BeforeClass
@@ -499,11 +443,9 @@ index 0000000..2c16ed3
 +    try {
 +      // prepare a sample Job
 +      JobDetail job = JobBuilder.newJob(TestJob.class).withIdentity("random", "group").build();
-+      job.getJobDataMap().put("count", 0);
 +      scheduler.scheduleJob(job, getPastPerSecondsTrigger());
 +      Thread.sleep(2000);
-+      SchedulerMetaData metaData = scheduler.getMetaData();
-+      Assert.assertEquals(metaData.getNumberOfJobsExecuted(), 10);
++      Assert.assertEquals(counter, 10);
 +    } finally {
 +      scheduler.shutdown();
 +    }
@@ -530,7 +472,7 @@ index 0000000..2c16ed3
 +  public static class TestJob implements Job {
 +    @Override
 +    public void execute(JobExecutionContext context) throws JobExecutionException {
-+      // do nothing
++      AlarmServiceTest.counter++;
 +    }
 +  }
 +
@@ -540,12 +482,17 @@ index 0000000..2c16ed3
 +    DateTime start = formatter.parseDateTime("2016-03-03");
 +    DateTime end = formatter.parseDateTime("2016-03-06");
 +    SchedulerJobHandle jobHandle = new SchedulerJobHandle(UUID.randomUUID());
-+    System.out.println("jobHandle = " + jobHandle);
 +    XFrequency frequency = new XFrequency();
 +    frequency.setEnum(XFrequencyEnum.DAILY);
 +    alarmService.schedule(start, end, frequency, jobHandle);
 +    Thread.sleep(2000); // give chance to the event listener to process the data
-+    Assert.assertEquals(events.size(), 3);
++    int count = 0;
++    for (SchedulerAlarmEvent event : events) {
++      if (event.getJobHandle().equals(jobHandle)) {
++        count++;
++      }
++    }
++    Assert.assertEquals(count, 3);
 +    DateTime expectedDate = start;
 +    Set<DateTime> actualSet = new HashSet<>();
 +    for (SchedulerAlarmEvent e : events) {
