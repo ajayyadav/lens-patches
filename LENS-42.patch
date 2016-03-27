@@ -1,0 +1,183 @@
+commit 5c503d01bfdf59a45de4b16722b2b50e3534e438
+Author: Ajay Yadava <ajaynsit@gmail.com>
+Date:   Mon Mar 28 00:05:34 2016 +0530
+
+    Need to create a new pojo as finished lens query doesn't contain lot of the values for LensQuery.
+
+diff --git a/lens-server-api/src/main/java/org/apache/lens/server/api/query/QueryExecutionService.java b/lens-server-api/src/main/java/org/apache/lens/server/api/query/QueryExecutionService.java
+index 15ed222..f31e82c 100644
+--- a/lens-server-api/src/main/java/org/apache/lens/server/api/query/QueryExecutionService.java
++++ b/lens-server-api/src/main/java/org/apache/lens/server/api/query/QueryExecutionService.java
+@@ -232,10 +232,10 @@ public interface QueryExecutionService {
+    * @param queryName     return queries containing the query name. If null, all queries will be returned
+    * @param fromDate      start date of time range interval
+    * @param toDate        end date of the time range interval
+-   * @return List of query handles
++   * @return List of queries
+    * @throws LensException the lens exception
+    */
+-  List<QueryHandle> getAllQueries(LensSessionHandle sessionHandle, String state, String user, String driver,
++  List<LensQuery> getAllQueries(LensSessionHandle sessionHandle, String state, String user, String driver,
+     String queryName, long fromDate, long toDate) throws LensException;
+ 
+   /**
+diff --git a/lens-server/src/main/java/org/apache/lens/server/query/LensServerDAO.java b/lens-server/src/main/java/org/apache/lens/server/query/LensServerDAO.java
+index 1d6125c..6eb49be 100644
+--- a/lens-server/src/main/java/org/apache/lens/server/query/LensServerDAO.java
++++ b/lens-server/src/main/java/org/apache/lens/server/query/LensServerDAO.java
+@@ -26,6 +26,7 @@ import java.util.List;
+ 
+ import javax.sql.DataSource;
+ 
++import org.apache.lens.api.query.LensQuery;
+ import org.apache.lens.api.query.QueryHandle;
+ import org.apache.lens.server.api.error.LensException;
+ import org.apache.lens.server.api.query.FinishedLensQuery;
+@@ -35,6 +36,7 @@ import org.apache.commons.dbutils.DbUtils;
+ import org.apache.commons.dbutils.QueryRunner;
+ import org.apache.commons.dbutils.ResultSetHandler;
+ import org.apache.commons.dbutils.handlers.BeanHandler;
++import org.apache.commons.dbutils.handlers.BeanListHandler;
+ import org.apache.commons.lang3.StringUtils;
+ import org.apache.hadoop.conf.Configuration;
+ 
+@@ -165,11 +167,11 @@ public class LensServerDAO {
+    * @return the list
+    * @throws LensException the lens exception
+    */
+-  public List<QueryHandle> findFinishedQueries(String state, String user, String driverName, String queryName,
+-    long fromDate, long toDate) throws LensException {
++  public List<FinishedLensQuery> findFinishedQueries(String state, String user, String driverName, String queryName,
++                                             long fromDate, long toDate) throws LensException {
+     boolean addFilter = StringUtils.isNotBlank(state) || StringUtils.isNotBlank(user)
+       || StringUtils.isNotBlank(queryName);
+-    StringBuilder builder = new StringBuilder("SELECT handle FROM finished_queries");
++    StringBuilder builder = new StringBuilder("SELECT * FROM finished_queries");
+     List<Object> params = null;
+     if (addFilter) {
+       builder.append(" WHERE ");
+@@ -202,21 +204,7 @@ public class LensServerDAO {
+       builder.append(StringUtils.join(filters, " AND "));
+     }
+ 
+-    ResultSetHandler<List<QueryHandle>> resultSetHandler = new ResultSetHandler<List<QueryHandle>>() {
+-      @Override
+-      public List<QueryHandle> handle(ResultSet resultSet) throws SQLException {
+-        List<QueryHandle> queryHandleList = new ArrayList<QueryHandle>();
+-        while (resultSet.next()) {
+-          String handle = resultSet.getString(1);
+-          try {
+-            queryHandleList.add(QueryHandle.fromString(handle));
+-          } catch (IllegalArgumentException exc) {
+-            log.warn("Warning invalid query handle found in DB " + handle);
+-          }
+-        }
+-        return queryHandleList;
+-      }
+-    };
++    ResultSetHandler<List<FinishedLensQuery>> resultSetHandler = new BeanListHandler<>(FinishedLensQuery.class);
+ 
+     QueryRunner runner = new QueryRunner(ds);
+     String query = builder.toString();
+diff --git a/lens-server/src/main/java/org/apache/lens/server/query/QueryExecutionServiceImpl.java b/lens-server/src/main/java/org/apache/lens/server/query/QueryExecutionServiceImpl.java
+index 90c25e4..6a6439f 100644
+--- a/lens-server/src/main/java/org/apache/lens/server/query/QueryExecutionServiceImpl.java
++++ b/lens-server/src/main/java/org/apache/lens/server/query/QueryExecutionServiceImpl.java
+@@ -39,6 +39,7 @@ import javax.ws.rs.core.StreamingOutput;
+ 
+ import org.apache.lens.api.LensConf;
+ import org.apache.lens.api.LensSessionHandle;
++import org.apache.lens.api.Priority;
+ import org.apache.lens.api.error.ErrorCollection;
+ import org.apache.lens.api.query.*;
+ import org.apache.lens.api.query.QueryStatus.Status;
+@@ -2228,7 +2229,7 @@ public class QueryExecutionServiceImpl extends BaseLensService implements QueryE
+    * java.lang.String, java.lang.String, java.lang.String, java.lang.String, long, long)
+    */
+   @Override
+-  public List<QueryHandle> getAllQueries(LensSessionHandle sessionHandle, String state, String userName, String driver,
++  public List<LensQuery> getAllQueries(LensSessionHandle sessionHandle, String state, String userName, String driver,
+     String queryName, long fromDate, long toDate) throws LensException {
+     validateTimeRange(fromDate, toDate);
+     userName = UtilityMethods.removeDomain(userName);
+@@ -2249,11 +2250,15 @@ public class QueryExecutionServiceImpl extends BaseLensService implements QueryE
+       }
+       boolean filterByDriver = StringUtils.isNotBlank(driver);
+ 
+-      List<QueryHandle> all = new ArrayList<QueryHandle>(allQueries.keySet());
+-      Iterator<QueryHandle> itr = all.iterator();
++      List<LensQuery> all = new ArrayList<>();
++      for (QueryHandle handle : allQueries.keySet()) {
++        all.add(allQueries.get(handle).toLensQuery());
++      }
++
++      Iterator<LensQuery> itr = all.iterator();
+       while (itr.hasNext()) {
+-        QueryHandle q = itr.next();
+-        QueryContext context = allQueries.get(q);
++        LensQuery q = itr.next();
++        QueryContext context = allQueries.get(q.getQueryHandle());
+         long querySubmitTime = context.getSubmissionTime();
+         if ((filterByStatus && status != context.getStatus().getStatus())
+           || (filterByQueryName && !context.getQueryName().toLowerCase().contains(queryName))
+@@ -2269,11 +2274,21 @@ public class QueryExecutionServiceImpl extends BaseLensService implements QueryE
+         if ("all".equalsIgnoreCase(userName)) {
+           userName = null;
+         }
+-        List<QueryHandle> persistedQueries = lensServerDao.findFinishedQueries(state, userName, driver, queryName,
++        List<FinishedLensQuery> persistedQueries = lensServerDao.findFinishedQueries(state, userName, driver, queryName,
+           fromDate, toDate);
+         if (persistedQueries != null && !persistedQueries.isEmpty()) {
+           log.info("Adding persisted queries {}", persistedQueries.size());
+-          all.addAll(persistedQueries);
++          // convert finished queries to LensQueries
++          LensQuery query;
++          for (FinishedLensQuery fq : persistedQueries) {
++            QueryStatus queryStatus = new QueryStatus(100, 0, Status.valueOf(fq.getStatus()), "", true, "", "", null);
++            QueryHandle handle = QueryHandle.fromString(fq.getHandle());
++            query = new LensQuery(handle, fq.getUserQuery(), fq.getSubmitter(),
++                        Priority.valueOf(fq.getPriority()), true, fq.getDriverName(), fq.getUserQuery(), queryStatus,
++                        fq.getResult(), null, null, fq.getSubmissionTime(), 0, fq.getDriverStartTime(),
++                        fq.getDriverEndTime(), fq.getEndTime(), 0, fq.getQueryName());
++            all.add(query);
++          }
+         }
+       }
+ 
+diff --git a/lens-server/src/main/java/org/apache/lens/server/query/QueryServiceResource.java b/lens-server/src/main/java/org/apache/lens/server/query/QueryServiceResource.java
+index a043550..cfb1765 100644
+--- a/lens-server/src/main/java/org/apache/lens/server/query/QueryServiceResource.java
++++ b/lens-server/src/main/java/org/apache/lens/server/query/QueryServiceResource.java
+@@ -148,12 +148,12 @@ public class QueryServiceResource {
+    * @param driver    Get queries submitted on a specific driver.
+    * @param fromDate  from date to search queries in a time range, the range is inclusive(submitTime &gt;= fromDate)
+    * @param toDate    to date to search queries in a time range, the range is inclusive(toDate &gt;= submitTime)
+-   * @return List of {@link QueryHandle} objects
++   * @return List of {@link LensQuery} objects
+    */
+   @GET
+   @Path("queries")
+   @Produces({MediaType.APPLICATION_XML, MediaType.APPLICATION_JSON, MediaType.TEXT_PLAIN})
+-  public List<QueryHandle> getAllQueries(@QueryParam("sessionid") LensSessionHandle sessionid,
++  public List<LensQuery> getAllQueries(@QueryParam("sessionid") LensSessionHandle sessionid,
+     @DefaultValue("") @QueryParam("state") String state, @DefaultValue("") @QueryParam("queryName") String queryName,
+     @DefaultValue("") @QueryParam("user") String user, @DefaultValue("") @QueryParam("driver") String driver,
+     @DefaultValue("-1") @QueryParam("fromDate") long fromDate, @DefaultValue("-1") @QueryParam("toDate") long toDate) {
+@@ -274,13 +274,13 @@ public class QueryServiceResource {
+     @DefaultValue("-1") @QueryParam("fromDate") long fromDate, @DefaultValue("-1") @QueryParam("toDate") long toDate) {
+     checkSessionId(sessionid);
+     int numCancelled = 0;
+-    List<QueryHandle> handles = null;
++    List<LensQuery> handles = null;
+     boolean failed = false;
+     try {
+-      handles = getAllQueries(sessionid, state, queryName, user, driver, fromDate,
++      handles = queryServer.getAllQueries(sessionid, state, queryName, user, driver, fromDate,
+         toDate == -1L ? Long.MAX_VALUE : toDate);
+-      for (QueryHandle handle : handles) {
+-        if (cancelQuery(sessionid, handle)) {
++      for (LensQuery query : handles) {
++        if (cancelQuery(sessionid, query.getQueryHandle())) {
+           numCancelled++;
+         }
+       }
