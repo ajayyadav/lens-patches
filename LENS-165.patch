@@ -1,0 +1,1162 @@
+From a6667da3e6830cd041ded61b87f054eee61a7133 Mon Sep 17 00:00:00 2001
+From: Ajay Yadava <ajaynsit@gmail.com>
+Date: Sun, 27 Mar 2016 13:16:24 +0530
+Subject: [PATCH] LENS-165 run tests individually before running on entire
+ module.
+
+---
+ .../apache/lens/cli/LensCliApplicationTest.java    | 23 ------------
+ .../apache/lens/cli/TestLensDimensionCommands.java |  8 ++---
+ .../lens/cli/TestLensDimensionTableCommands.java   | 24 ++++++-------
+ .../org/apache/lens/cli/TestLensFactCommands.java  |  4 +--
+ .../cli/TestLensFactCommandsWithMissingWeight.java |  9 +++--
+ .../lens/cli/TestLensLogResourceCommands.java      |  8 ++---
+ .../apache/lens/cli/TestLensStorageCommands.java   |  4 +--
+ .../org/apache/lens/client/TestLensClient.java     | 12 +++----
+ .../java/org/apache/lens/ml/TestMLResource.java    | 10 +++---
+ .../test/java/org/apache/lens/ml/TestMLRunner.java |  9 +++--
+ .../org/apache/lens/server/LensJerseyTest.java     | 11 ++++--
+ .../org/apache/lens/server/TestIndexResource.java  | 22 ------------
+ .../apache/lens/server/TestLensApplication.java    | 11 ------
+ .../org/apache/lens/server/TestLogResource.java    | 25 ++-----------
+ .../org/apache/lens/server/TestServerMode.java     | 20 +++--------
+ .../org/apache/lens/server/TestServerRestart.java  | 42 +++++++++-------------
+ .../apache/lens/server/TestStaticFileResource.java | 22 ------------
+ .../lens/server/healthcheck/TestHealthChecks.java  | 13 +------
+ .../server/metrics/TestResourceMethodMetrics.java  | 10 +++---
+ .../server/query/QueryAPIErrorResponseTest.java    | 17 +++------
+ .../lens/server/query/TestQueryConstraints.java    | 14 ++++----
+ .../server/query/TestQueryEndEmailNotifier.java    |  6 ++--
+ .../apache/lens/server/query/TestQueryService.java |  6 ++--
+ .../lens/server/query/TestResultFormatting.java    | 18 ++++++----
+ .../server/query/save/TestSavedQueryService.java   | 26 ++++++++------
+ .../lens/server/session/TestSessionResource.java   | 20 +++--------
+ .../lens/server/ui/TestSessionUIResource.java      | 23 ------------
+ 27 files changed, 120 insertions(+), 297 deletions(-)
+
+diff --git a/lens-cli/src/test/java/org/apache/lens/cli/LensCliApplicationTest.java b/lens-cli/src/test/java/org/apache/lens/cli/LensCliApplicationTest.java
+index c536ed6..b8240cc 100644
+--- a/lens-cli/src/test/java/org/apache/lens/cli/LensCliApplicationTest.java
++++ b/lens-cli/src/test/java/org/apache/lens/cli/LensCliApplicationTest.java
+@@ -24,9 +24,6 @@ import javax.ws.rs.core.UriBuilder;
+ 
+ import org.apache.lens.server.LensAllApplicationJerseyTest;
+ 
+-import org.testng.annotations.AfterTest;
+-import org.testng.annotations.BeforeTest;
+-
+ /**
+  * The Class LensCliApplicationTest.
+  */
+@@ -43,24 +40,4 @@ public class LensCliApplicationTest extends LensAllApplicationJerseyTest {
+     return UriBuilder.fromUri(getUri()).path("lensapi").build();
+   }
+ 
+-  /*
+-   * (non-Javadoc)
+-   *
+-   * @see org.glassfish.jersey.test.JerseyTest#setUp()
+-   */
+-  @BeforeTest
+-  public void setUp() throws Exception {
+-    super.setUp();
+-  }
+-
+-  /*
+-   * (non-Javadoc)
+-   *
+-   * @see org.glassfish.jersey.test.JerseyTest#tearDown()
+-   */
+-  @AfterTest
+-  public void tearDown() throws Exception {
+-    super.tearDown();
+-  }
+-
+ }
+diff --git a/lens-cli/src/test/java/org/apache/lens/cli/TestLensDimensionCommands.java b/lens-cli/src/test/java/org/apache/lens/cli/TestLensDimensionCommands.java
+index a3f01c3..93695d6 100644
+--- a/lens-cli/src/test/java/org/apache/lens/cli/TestLensDimensionCommands.java
++++ b/lens-cli/src/test/java/org/apache/lens/cli/TestLensDimensionCommands.java
+@@ -18,9 +18,7 @@
+  */
+ package org.apache.lens.cli;
+ 
+-import static org.testng.Assert.assertEquals;
+-import static org.testng.Assert.assertFalse;
+-import static org.testng.Assert.assertTrue;
++import static org.testng.Assert.*;
+ 
+ import java.io.*;
+ import java.net.URISyntaxException;
+@@ -33,7 +31,7 @@ import org.apache.lens.cli.table.XJoinChainTable;
+ import org.apache.lens.client.LensClient;
+ 
+ import org.testng.Assert;
+-import org.testng.annotations.AfterTest;
++import org.testng.annotations.AfterClass;
+ import org.testng.annotations.Test;
+ 
+ import lombok.extern.slf4j.Slf4j;
+@@ -56,7 +54,7 @@ public class TestLensDimensionCommands extends LensCliApplicationTest {
+     return command;
+   }
+ 
+-  @AfterTest
++  @AfterClass
+   public void cleanUp() {
+     if (command != null) {
+       command.getClient().closeConnection();
+diff --git a/lens-cli/src/test/java/org/apache/lens/cli/TestLensDimensionTableCommands.java b/lens-cli/src/test/java/org/apache/lens/cli/TestLensDimensionTableCommands.java
+index 5d6d768..7190617 100644
+--- a/lens-cli/src/test/java/org/apache/lens/cli/TestLensDimensionTableCommands.java
++++ b/lens-cli/src/test/java/org/apache/lens/cli/TestLensDimensionTableCommands.java
+@@ -18,22 +18,22 @@
+  */
+ package org.apache.lens.cli;
+ 
+-import static org.testng.Assert.*;
++  import static org.testng.Assert.*;
+ 
+-import java.io.*;
+-import java.net.URISyntaxException;
+-import java.net.URL;
++  import java.io.*;
++  import java.net.URISyntaxException;
++  import java.net.URL;
+ 
+-import javax.ws.rs.NotFoundException;
++  import javax.ws.rs.NotFoundException;
+ 
+-import org.apache.lens.cli.commands.LensDimensionCommands;
+-import org.apache.lens.cli.commands.LensDimensionTableCommands;
+-import org.apache.lens.client.LensClient;
++  import org.apache.lens.cli.commands.LensDimensionCommands;
++  import org.apache.lens.cli.commands.LensDimensionTableCommands;
++  import org.apache.lens.client.LensClient;
+ 
+-import org.testng.annotations.AfterTest;
+-import org.testng.annotations.Test;
++  import org.testng.annotations.AfterClass;
++  import org.testng.annotations.Test;
+ 
+-import lombok.extern.slf4j.Slf4j;
++  import lombok.extern.slf4j.Slf4j;
+ 
+ /**
+  * The Class TestLensDimensionTableCommands.
+@@ -66,7 +66,7 @@ public class TestLensDimensionTableCommands extends LensCliApplicationTest {
+     return dimensionCommand;
+   }
+ 
+-  @AfterTest
++  @AfterClass
+   public void cleanUp() {
+     if (command != null) {
+       command.getClient().closeConnection();
+diff --git a/lens-cli/src/test/java/org/apache/lens/cli/TestLensFactCommands.java b/lens-cli/src/test/java/org/apache/lens/cli/TestLensFactCommands.java
+index 9670d8f..0560bb4 100644
+--- a/lens-cli/src/test/java/org/apache/lens/cli/TestLensFactCommands.java
++++ b/lens-cli/src/test/java/org/apache/lens/cli/TestLensFactCommands.java
+@@ -31,7 +31,7 @@ import org.apache.lens.cli.commands.LensCubeCommands;
+ import org.apache.lens.cli.commands.LensFactCommands;
+ import org.apache.lens.client.LensClient;
+ 
+-import org.testng.annotations.AfterTest;
++import org.testng.annotations.AfterClass;
+ import org.testng.annotations.Test;
+ 
+ import lombok.extern.slf4j.Slf4j;
+@@ -96,7 +96,7 @@ public class TestLensFactCommands extends LensCliApplicationTest {
+     return cubeCommands;
+   }
+ 
+-  @AfterTest
++  @AfterClass
+   public void cleanUp() {
+     if (command != null) {
+       command.getClient().closeConnection();
+diff --git a/lens-cli/src/test/java/org/apache/lens/cli/TestLensFactCommandsWithMissingWeight.java b/lens-cli/src/test/java/org/apache/lens/cli/TestLensFactCommandsWithMissingWeight.java
+index 24f9279..1923afe 100644
+--- a/lens-cli/src/test/java/org/apache/lens/cli/TestLensFactCommandsWithMissingWeight.java
++++ b/lens-cli/src/test/java/org/apache/lens/cli/TestLensFactCommandsWithMissingWeight.java
+@@ -18,8 +18,8 @@
+  */
+ package org.apache.lens.cli;
+ 
+-import java.io.*;
+-
++import java.io.File;
++import java.io.IOException;
+ import java.net.URISyntaxException;
+ import java.net.URL;
+ 
+@@ -29,9 +29,8 @@ import org.apache.lens.client.LensClient;
+ 
+ import org.slf4j.Logger;
+ import org.slf4j.LoggerFactory;
+-
+ import org.testng.Assert;
+-import org.testng.annotations.AfterTest;
++import org.testng.annotations.AfterClass;
+ import org.testng.annotations.Test;
+ 
+ 
+@@ -109,7 +108,7 @@ public class TestLensFactCommandsWithMissingWeight extends LensCliApplicationTes
+     return cubeCommands;
+   }
+ 
+-  @AfterTest
++  @AfterClass
+   public void cleanUp() {
+     if (command != null) {
+       command.getClient().closeConnection();
+diff --git a/lens-cli/src/test/java/org/apache/lens/cli/TestLensLogResourceCommands.java b/lens-cli/src/test/java/org/apache/lens/cli/TestLensLogResourceCommands.java
+index 72a5d9d..4805cb7 100644
+--- a/lens-cli/src/test/java/org/apache/lens/cli/TestLensLogResourceCommands.java
++++ b/lens-cli/src/test/java/org/apache/lens/cli/TestLensLogResourceCommands.java
+@@ -29,8 +29,8 @@ import org.apache.lens.client.LensClient;
+ import org.apache.commons.io.FileUtils;
+ 
+ import org.testng.Assert;
+-import org.testng.annotations.AfterTest;
+-import org.testng.annotations.BeforeTest;
++import org.testng.annotations.AfterClass;
++import org.testng.annotations.BeforeClass;
+ import org.testng.annotations.Test;
+ 
+ public class TestLensLogResourceCommands extends LensCliApplicationTest {
+@@ -38,14 +38,14 @@ public class TestLensLogResourceCommands extends LensCliApplicationTest {
+   private LensClient client = null;
+   private LensLogResourceCommands commands = null;
+ 
+-  @BeforeTest
++  @BeforeClass
+   public void setup() {
+     client = new LensClient();
+     commands = new LensLogResourceCommands();
+     commands.setClient(client);
+   }
+ 
+-  @AfterTest
++  @AfterClass
+   public void cleanup() {
+     if (client != null) {
+       client.closeConnection();
+diff --git a/lens-cli/src/test/java/org/apache/lens/cli/TestLensStorageCommands.java b/lens-cli/src/test/java/org/apache/lens/cli/TestLensStorageCommands.java
+index c4ab614..9236a87 100644
+--- a/lens-cli/src/test/java/org/apache/lens/cli/TestLensStorageCommands.java
++++ b/lens-cli/src/test/java/org/apache/lens/cli/TestLensStorageCommands.java
+@@ -27,7 +27,7 @@ import org.apache.lens.client.LensClient;
+ import org.slf4j.Logger;
+ import org.slf4j.LoggerFactory;
+ import org.testng.Assert;
+-import org.testng.annotations.AfterTest;
++import org.testng.annotations.AfterClass;
+ import org.testng.annotations.Test;
+ 
+ /**
+@@ -62,7 +62,7 @@ public class TestLensStorageCommands extends LensCliApplicationTest {
+     return command;
+   }
+ 
+-  @AfterTest
++  @AfterClass
+   public void cleanup() {
+     if (command != null) {
+       command.getClient().closeConnection();
+diff --git a/lens-client/src/test/java/org/apache/lens/client/TestLensClient.java b/lens-client/src/test/java/org/apache/lens/client/TestLensClient.java
+index 7a00f65..d09e33e 100644
+--- a/lens-client/src/test/java/org/apache/lens/client/TestLensClient.java
++++ b/lens-client/src/test/java/org/apache/lens/client/TestLensClient.java
+@@ -30,8 +30,8 @@ import org.apache.hadoop.hive.metastore.api.Database;
+ import org.apache.hadoop.hive.ql.metadata.Hive;
+ 
+ import org.testng.Assert;
+-import org.testng.annotations.AfterTest;
+-import org.testng.annotations.BeforeTest;
++import org.testng.annotations.AfterClass;
++import org.testng.annotations.BeforeClass;
+ import org.testng.annotations.Test;
+ 
+ @Test(groups = "unit-test")
+@@ -48,20 +48,16 @@ public class TestLensClient extends LensAllApplicationJerseyTest {
+     return UriBuilder.fromUri("http://localhost/").port(getTestPort()).path("/lensapi").build();
+   }
+ 
+-  @BeforeTest
++  @BeforeClass
+   public void setUp() throws Exception {
+-    super.setUp();
+-
+     Hive hive = Hive.get(new HiveConf());
+     Database db = new Database();
+     db.setName(TEST_DB);
+     hive.createDatabase(db, true);
+   }
+ 
+-  @AfterTest
++  @AfterClass
+   public void tearDown() throws Exception {
+-    super.tearDown();
+-
+     Hive hive = Hive.get(new HiveConf());
+     hive.dropDatabase(TEST_DB);
+   }
+diff --git a/lens-ml-lib/src/test/java/org/apache/lens/ml/TestMLResource.java b/lens-ml-lib/src/test/java/org/apache/lens/ml/TestMLResource.java
+index 51344ce..0107e7e 100644
+--- a/lens-ml-lib/src/test/java/org/apache/lens/ml/TestMLResource.java
++++ b/lens-ml-lib/src/test/java/org/apache/lens/ml/TestMLResource.java
+@@ -52,9 +52,9 @@ import org.apache.hadoop.hive.ql.metadata.Table;
+ import org.glassfish.jersey.client.ClientConfig;
+ import org.glassfish.jersey.media.multipart.MultiPartFeature;
+ import org.testng.Assert;
+-import org.testng.annotations.AfterTest;
++import org.testng.annotations.AfterClass;
++import org.testng.annotations.BeforeClass;
+ import org.testng.annotations.BeforeMethod;
+-import org.testng.annotations.BeforeTest;
+ import org.testng.annotations.Test;
+ 
+ import lombok.extern.slf4j.Slf4j;
+@@ -88,9 +88,8 @@ public class TestMLResource extends LensJerseyTest {
+     return UriBuilder.fromUri("http://localhost/").port(getTestPort()).path("/lensapi").build();
+   }
+ 
+-  @BeforeTest
++  @BeforeClass
+   public void setUp() throws Exception {
+-    super.setUp();
+     Hive hive = Hive.get(new HiveConf());
+     Database db = new Database();
+     db.setName(TEST_DB);
+@@ -103,9 +102,8 @@ public class TestMLResource extends LensJerseyTest {
+     mlClient = new LensMLClient(client);
+   }
+ 
+-  @AfterTest
++  @AfterClass
+   public void tearDown() throws Exception {
+-    super.tearDown();
+     Hive hive = Hive.get(new HiveConf());
+ 
+     try {
+diff --git a/lens-ml-lib/src/test/java/org/apache/lens/ml/TestMLRunner.java b/lens-ml-lib/src/test/java/org/apache/lens/ml/TestMLRunner.java
+index 3493709..bb4a300 100644
+--- a/lens-ml-lib/src/test/java/org/apache/lens/ml/TestMLRunner.java
++++ b/lens-ml-lib/src/test/java/org/apache/lens/ml/TestMLRunner.java
+@@ -40,8 +40,8 @@ import org.apache.hadoop.hive.metastore.api.Database;
+ import org.apache.hadoop.hive.ql.metadata.Hive;
+ 
+ import org.testng.Assert;
+-import org.testng.annotations.AfterTest;
+-import org.testng.annotations.BeforeTest;
++import org.testng.annotations.AfterClass;
++import org.testng.annotations.BeforeClass;
+ import org.testng.annotations.Test;
+ 
+ import lombok.extern.slf4j.Slf4j;
+@@ -68,9 +68,8 @@ public class TestMLRunner extends LensJerseyTest {
+     return UriBuilder.fromUri("http://localhost/").port(getTestPort()).path("/lensapi").build();
+   }
+ 
+-  @BeforeTest
++  @BeforeClass
+   public void setUp() throws Exception {
+-    super.setUp();
+     Hive hive = Hive.get(new HiveConf());
+     Database db = new Database();
+     db.setName(TEST_DB);
+@@ -83,7 +82,7 @@ public class TestMLRunner extends LensJerseyTest {
+     mlClient = new LensMLClient(client);
+   }
+ 
+-  @AfterTest
++  @AfterClass
+   public void tearDown() throws Exception {
+     super.tearDown();
+     Hive hive = Hive.get(new HiveConf());
+diff --git a/lens-server/src/test/java/org/apache/lens/server/LensJerseyTest.java b/lens-server/src/test/java/org/apache/lens/server/LensJerseyTest.java
+index fb757e4..58d5d16 100644
+--- a/lens-server/src/test/java/org/apache/lens/server/LensJerseyTest.java
++++ b/lens-server/src/test/java/org/apache/lens/server/LensJerseyTest.java
+@@ -22,7 +22,9 @@ import static org.apache.lens.server.LensServerTestUtil.DB_WITH_JARS;
+ import static org.apache.lens.server.LensServerTestUtil.DB_WITH_JARS_2;
+ import static org.apache.lens.server.LensServerTestUtil.createTestDatabaseResources;
+ 
+-import static org.testng.Assert.*;
++import static org.testng.Assert.assertEquals;
++import static org.testng.Assert.assertNotNull;
++import static org.testng.Assert.assertTrue;
+ 
+ import java.io.IOException;
+ import java.net.ServerSocket;
+@@ -53,11 +55,12 @@ import org.glassfish.jersey.media.multipart.MultiPartFeature;
+ import org.glassfish.jersey.moxy.json.MoxyJsonFeature;
+ import org.glassfish.jersey.test.JerseyTest;
+ import org.testng.annotations.AfterSuite;
++import org.testng.annotations.AfterTest;
+ import org.testng.annotations.BeforeSuite;
++import org.testng.annotations.BeforeTest;
+ import org.testng.annotations.DataProvider;
+ 
+ import com.google.common.collect.Lists;
+-
+ import lombok.extern.slf4j.Slf4j;
+ 
+ /**
+@@ -79,14 +82,18 @@ public abstract class LensJerseyTest extends JerseyTest {
+     return port != -1;
+   }
+ 
++  @BeforeTest
+   public void setUp() throws Exception {
+     log.info("setUp in class: {}", this.getClass().getCanonicalName());
+     super.setUp();
+   }
++
++  @AfterTest
+   public void tearDown() throws Exception {
+     log.info("tearDown in class: {}", this.getClass().getCanonicalName());
+     super.tearDown();
+   }
++
+   protected int getTestPort() {
+     if (isPortAlreadyFound()) {
+       return port;
+diff --git a/lens-server/src/test/java/org/apache/lens/server/TestIndexResource.java b/lens-server/src/test/java/org/apache/lens/server/TestIndexResource.java
+index e149116..430bd25 100644
+--- a/lens-server/src/test/java/org/apache/lens/server/TestIndexResource.java
++++ b/lens-server/src/test/java/org/apache/lens/server/TestIndexResource.java
+@@ -22,8 +22,6 @@ import javax.ws.rs.client.WebTarget;
+ import javax.ws.rs.core.Application;
+ 
+ import org.testng.Assert;
+-import org.testng.annotations.AfterTest;
+-import org.testng.annotations.BeforeTest;
+ import org.testng.annotations.Test;
+ 
+ /**
+@@ -35,26 +33,6 @@ public class TestIndexResource extends LensJerseyTest {
+   /*
+    * (non-Javadoc)
+    *
+-   * @see org.glassfish.jersey.test.JerseyTest#setUp()
+-   */
+-  @BeforeTest
+-  public void setUp() throws Exception {
+-    super.setUp();
+-  }
+-
+-  /*
+-   * (non-Javadoc)
+-   *
+-   * @see org.glassfish.jersey.test.JerseyTest#tearDown()
+-   */
+-  @AfterTest
+-  public void tearDown() throws Exception {
+-    super.tearDown();
+-  }
+-
+-  /*
+-   * (non-Javadoc)
+-   *
+    * @see org.glassfish.jersey.test.JerseyTest#configure()
+    */
+   @Override
+diff --git a/lens-server/src/test/java/org/apache/lens/server/TestLensApplication.java b/lens-server/src/test/java/org/apache/lens/server/TestLensApplication.java
+index 6636346..5909408 100644
+--- a/lens-server/src/test/java/org/apache/lens/server/TestLensApplication.java
++++ b/lens-server/src/test/java/org/apache/lens/server/TestLensApplication.java
+@@ -29,7 +29,6 @@ import org.apache.lens.server.api.metrics.MetricsService;
+ import org.apache.lens.server.metrics.MetricsServiceImpl;
+ 
+ import org.testng.Assert;
+-import org.testng.annotations.BeforeTest;
+ import org.testng.annotations.Test;
+ 
+ import com.codahale.metrics.ScheduledReporter;
+@@ -41,16 +40,6 @@ import com.codahale.metrics.ScheduledReporter;
+ public class TestLensApplication extends LensAllApplicationJerseyTest {
+ 
+   /**
+-   * Setup.
+-   *
+-   * @throws Exception the exception
+-   */
+-  @BeforeTest
+-  public void setup() throws Exception {
+-    super.setUp();
+-  }
+-
+-  /**
+    * Test ws resources loaded.
+    *
+    * @throws InterruptedException the interrupted exception
+diff --git a/lens-server/src/test/java/org/apache/lens/server/TestLogResource.java b/lens-server/src/test/java/org/apache/lens/server/TestLogResource.java
+index f2cf37c..5e28d5b 100644
+--- a/lens-server/src/test/java/org/apache/lens/server/TestLogResource.java
++++ b/lens-server/src/test/java/org/apache/lens/server/TestLogResource.java
+@@ -18,7 +18,8 @@
+  */
+ package org.apache.lens.server;
+ 
+-import static org.testng.Assert.*;
++import static org.testng.Assert.assertEquals;
++import static org.testng.Assert.assertTrue;
+ 
+ import java.io.ByteArrayOutputStream;
+ import java.io.IOException;
+@@ -33,8 +34,6 @@ import org.apache.hadoop.io.IOUtils;
+ 
+ import org.glassfish.jersey.server.ResourceConfig;
+ import org.glassfish.jersey.test.TestProperties;
+-import org.testng.annotations.AfterTest;
+-import org.testng.annotations.BeforeTest;
+ import org.testng.annotations.Test;
+ 
+ import lombok.extern.slf4j.Slf4j;
+@@ -49,26 +48,6 @@ public class TestLogResource extends LensJerseyTest {
+   /*
+    * (non-Javadoc)
+    *
+-   * @see org.glassfish.jersey.test.JerseyTest#setUp()
+-   */
+-  @BeforeTest
+-  public void setUp() throws Exception {
+-    super.setUp();
+-  }
+-
+-  /*
+-   * (non-Javadoc)
+-   *
+-   * @see org.glassfish.jersey.test.JerseyTest#tearDown()
+-   */
+-  @AfterTest
+-  public void tearDown() throws Exception {
+-    super.tearDown();
+-  }
+-
+-  /*
+-   * (non-Javadoc)
+-   *
+    * @see org.glassfish.jersey.test.JerseyTest#configure()
+    */
+   @Override
+diff --git a/lens-server/src/test/java/org/apache/lens/server/TestServerMode.java b/lens-server/src/test/java/org/apache/lens/server/TestServerMode.java
+index fce6e5f..a1daca9 100644
+--- a/lens-server/src/test/java/org/apache/lens/server/TestServerMode.java
++++ b/lens-server/src/test/java/org/apache/lens/server/TestServerMode.java
+@@ -43,8 +43,8 @@ import org.glassfish.jersey.media.multipart.FormDataBodyPart;
+ import org.glassfish.jersey.media.multipart.FormDataContentDisposition;
+ import org.glassfish.jersey.media.multipart.FormDataMultiPart;
+ import org.testng.Assert;
+-import org.testng.annotations.AfterTest;
+-import org.testng.annotations.BeforeTest;
++import org.testng.annotations.AfterClass;
++import org.testng.annotations.BeforeClass;
+ import org.testng.annotations.Test;
+ 
+ /**
+@@ -55,27 +55,15 @@ public class TestServerMode extends LensAllApplicationJerseyTest {
+ 
+   private LensSessionHandle lensSessionHandle;
+ 
+-  /*
+-   * (non-Javadoc)
+-   *
+-   * @see org.glassfish.jersey.test.JerseyTest#setUp()
+-   */
+-  @BeforeTest
++  @BeforeClass
+   public void setUp() throws Exception {
+-    super.setUp();
+     LensServerTestUtil.createTable("test_table", target(), RestAPITestUtil.openFooBarSession(target(), defaultMT),
+       defaultMT);
+   }
+ 
+-  /*
+-   * (non-Javadoc)
+-   *
+-   * @see org.glassfish.jersey.test.JerseyTest#tearDown()
+-   */
+-  @AfterTest
++  @AfterClass
+   public void tearDown() throws Exception {
+     RestAPITestUtil.closeSession(target(), lensSessionHandle, defaultMT);
+-    super.tearDown();
+   }
+ 
+   /**
+diff --git a/lens-server/src/test/java/org/apache/lens/server/TestServerRestart.java b/lens-server/src/test/java/org/apache/lens/server/TestServerRestart.java
+index 0f55d9e..4fb675f 100644
+--- a/lens-server/src/test/java/org/apache/lens/server/TestServerRestart.java
++++ b/lens-server/src/test/java/org/apache/lens/server/TestServerRestart.java
+@@ -24,8 +24,14 @@ import static org.apache.lens.server.common.RestAPITestUtil.execute;
+ 
+ import static org.testng.Assert.assertEquals;
+ 
+-import java.io.*;
+-import java.util.*;
++import java.io.File;
++import java.io.FileNotFoundException;
++import java.io.IOException;
++import java.io.PrintWriter;
++import java.util.ArrayList;
++import java.util.Arrays;
++import java.util.HashMap;
++import java.util.List;
+ 
+ import javax.ws.rs.client.Entity;
+ import javax.ws.rs.client.WebTarget;
+@@ -33,9 +39,15 @@ import javax.ws.rs.core.GenericType;
+ import javax.ws.rs.core.MediaType;
+ import javax.ws.rs.core.Response;
+ 
+-import org.apache.lens.api.*;
++import org.apache.lens.api.APIResult;
+ import org.apache.lens.api.APIResult.Status;
+-import org.apache.lens.api.query.*;
++import org.apache.lens.api.LensConf;
++import org.apache.lens.api.LensSessionHandle;
++import org.apache.lens.api.StringList;
++import org.apache.lens.api.query.LensQuery;
++import org.apache.lens.api.query.PersistentQueryResult;
++import org.apache.lens.api.query.QueryHandle;
++import org.apache.lens.api.query.QueryStatus;
+ import org.apache.lens.api.result.LensAPIResult;
+ import org.apache.lens.driver.hive.TestRemoteHiveDriver;
+ import org.apache.lens.server.api.error.LensException;
+@@ -53,8 +65,6 @@ import org.glassfish.jersey.media.multipart.FormDataBodyPart;
+ import org.glassfish.jersey.media.multipart.FormDataContentDisposition;
+ import org.glassfish.jersey.media.multipart.FormDataMultiPart;
+ import org.testng.Assert;
+-import org.testng.annotations.AfterTest;
+-import org.testng.annotations.BeforeTest;
+ import org.testng.annotations.Test;
+ 
+ import com.google.common.base.Optional;
+@@ -75,26 +85,6 @@ public class TestServerRestart extends LensAllApplicationJerseyTest {
+    */
+   private static final int NO_OF_HIVE_DRIVERS = 2;
+ 
+-  /*
+-   * (non-Javadoc)
+-   *
+-   * @see org.glassfish.jersey.test.JerseyTest#setUp()
+-   */
+-  @BeforeTest
+-  public void setUp() throws Exception {
+-    super.setUp();
+-  }
+-
+-  /*
+-   * (non-Javadoc)
+-   *
+-   * @see org.glassfish.jersey.test.JerseyTest#tearDown()
+-   */
+-  @AfterTest
+-  public void tearDown() throws Exception {
+-    super.tearDown();
+-  }
+-
+   /** The file created. */
+   private boolean fileCreated;
+ 
+diff --git a/lens-server/src/test/java/org/apache/lens/server/TestStaticFileResource.java b/lens-server/src/test/java/org/apache/lens/server/TestStaticFileResource.java
+index f8c5bf2..931c680 100644
+--- a/lens-server/src/test/java/org/apache/lens/server/TestStaticFileResource.java
++++ b/lens-server/src/test/java/org/apache/lens/server/TestStaticFileResource.java
+@@ -31,8 +31,6 @@ import org.apache.lens.server.api.LensConfConstants;
+ import org.apache.lens.server.ui.UIApp;
+ 
+ import org.glassfish.jersey.filter.LoggingFilter;
+-import org.testng.annotations.AfterTest;
+-import org.testng.annotations.BeforeTest;
+ import org.testng.annotations.Test;
+ 
+ /**
+@@ -44,26 +42,6 @@ public class TestStaticFileResource extends LensJerseyTest {
+   /*
+    * (non-Javadoc)
+    *
+-   * @see org.glassfish.jersey.test.JerseyTest#setUp()
+-   */
+-  @BeforeTest
+-  public void setUp() throws Exception {
+-    super.setUp();
+-  }
+-
+-  /*
+-   * (non-Javadoc)
+-   *
+-   * @see org.glassfish.jersey.test.JerseyTest#tearDown()
+-   */
+-  @AfterTest
+-  public void tearDown() throws Exception {
+-    super.tearDown();
+-  }
+-
+-  /*
+-   * (non-Javadoc)
+-   *
+    * @see org.glassfish.jersey.test.JerseyTest#configure()
+    */
+   @Override
+diff --git a/lens-server/src/test/java/org/apache/lens/server/healthcheck/TestHealthChecks.java b/lens-server/src/test/java/org/apache/lens/server/healthcheck/TestHealthChecks.java
+index 56c67fb..06cf117 100644
+--- a/lens-server/src/test/java/org/apache/lens/server/healthcheck/TestHealthChecks.java
++++ b/lens-server/src/test/java/org/apache/lens/server/healthcheck/TestHealthChecks.java
+@@ -18,7 +18,7 @@
+  */
+ package org.apache.lens.server.healthcheck;
+ 
+-import static org.testng.Assert.*;
++import static org.testng.Assert.assertTrue;
+ 
+ import org.apache.lens.server.EventServiceImpl;
+ import org.apache.lens.server.LensAllApplicationJerseyTest;
+@@ -32,23 +32,12 @@ import org.apache.lens.server.quota.QuotaServiceImpl;
+ import org.apache.lens.server.scheduler.SchedulerServiceImpl;
+ import org.apache.lens.server.session.HiveSessionService;
+ 
+-import org.testng.annotations.AfterTest;
+-import org.testng.annotations.BeforeTest;
+ import org.testng.annotations.Test;
+ 
+ import com.codahale.metrics.health.HealthCheck;
+ 
+ @Test(groups = "unit-test")
+ public class TestHealthChecks extends LensAllApplicationJerseyTest {
+-  @BeforeTest
+-  public void setUp() throws Exception {
+-    super.setUp();
+-  }
+-
+-  @AfterTest
+-  public void tearDown() throws Exception {
+-    super.tearDown();
+-  }
+ 
+   @Test
+   public void testCubeMetastoreServiceHealth() throws Exception {
+diff --git a/lens-server/src/test/java/org/apache/lens/server/metrics/TestResourceMethodMetrics.java b/lens-server/src/test/java/org/apache/lens/server/metrics/TestResourceMethodMetrics.java
+index c20ddf8..931976e 100644
+--- a/lens-server/src/test/java/org/apache/lens/server/metrics/TestResourceMethodMetrics.java
++++ b/lens-server/src/test/java/org/apache/lens/server/metrics/TestResourceMethodMetrics.java
+@@ -55,8 +55,8 @@ import org.glassfish.jersey.media.multipart.FormDataContentDisposition;
+ import org.glassfish.jersey.media.multipart.FormDataMultiPart;
+ import org.glassfish.jersey.test.TestProperties;
+ import org.testng.Assert;
+-import org.testng.annotations.AfterTest;
+-import org.testng.annotations.BeforeTest;
++import org.testng.annotations.AfterClass;
++import org.testng.annotations.BeforeClass;
+ import org.testng.annotations.Test;
+ 
+ import lombok.extern.slf4j.Slf4j;
+@@ -75,9 +75,8 @@ public class TestResourceMethodMetrics extends LensAllApplicationJerseyTest {
+    *
+    * @see org.glassfish.jersey.test.JerseyTest#setUp()
+    */
+-  @BeforeTest
++  @BeforeClass
+   public void setUp() throws Exception {
+-    super.setUp();
+     metricsSvc = LensServices.get().getService(MetricsService.NAME);
+     metastoreService = LensServices.get().getService(CubeMetastoreService.NAME);
+     lensSessionId = metastoreService.openSession("foo", "bar", new HashMap<String, String>());
+@@ -93,11 +92,10 @@ public class TestResourceMethodMetrics extends LensAllApplicationJerseyTest {
+     LensServerTestUtil.loadDataFromClasspath(tblName, testDataFile, target(), lensSessionId, defaultMT);
+   }
+ 
+-  @AfterTest
++  @AfterClass
+   public void tearDown() throws Exception {
+     LensServerTestUtil.dropTable(TestQueryService.TEST_TABLE, target(), lensSessionId, defaultMT);
+     metastoreService.closeSession(lensSessionId);
+-    super.tearDown();
+   }
+ 
+   private void disableResourceMethodMetering() {
+diff --git a/lens-server/src/test/java/org/apache/lens/server/query/QueryAPIErrorResponseTest.java b/lens-server/src/test/java/org/apache/lens/server/query/QueryAPIErrorResponseTest.java
+index 29fcd6d..9d0b5f7 100644
+--- a/lens-server/src/test/java/org/apache/lens/server/query/QueryAPIErrorResponseTest.java
++++ b/lens-server/src/test/java/org/apache/lens/server/query/QueryAPIErrorResponseTest.java
+@@ -38,7 +38,10 @@ import javax.xml.datatype.DatatypeConfigurationException;
+ import org.apache.lens.api.LensConf;
+ import org.apache.lens.api.LensSessionHandle;
+ import org.apache.lens.api.jaxb.LensJAXBContextResolver;
+-import org.apache.lens.api.metastore.*;
++import org.apache.lens.api.metastore.XColumn;
++import org.apache.lens.api.metastore.XCube;
++import org.apache.lens.api.metastore.XDimAttribute;
++import org.apache.lens.api.metastore.XFactTable;
+ import org.apache.lens.api.query.SupportedQuerySubmitOperations;
+ import org.apache.lens.api.result.LensAPIResult;
+ import org.apache.lens.api.result.LensErrorTO;
+@@ -60,8 +63,6 @@ import org.joda.time.DateTime;
+ import org.joda.time.DateTimeZone;
+ import org.joda.time.format.DateTimeFormat;
+ import org.joda.time.format.DateTimeFormatter;
+-import org.testng.annotations.AfterTest;
+-import org.testng.annotations.BeforeTest;
+ import org.testng.annotations.Test;
+ 
+ import com.google.common.base.Optional;
+@@ -73,16 +74,6 @@ public class QueryAPIErrorResponseTest extends LensJerseyTest {
+   private static final String MOCK_QUERY = "mock-query";
+   private static final String INVALID_OPERATION = "invalid-operation";
+ 
+-  @BeforeTest
+-  public void setUp() throws Exception {
+-    super.setUp();
+-  }
+-
+-  @AfterTest
+-  public void tearDown() throws Exception {
+-    super.tearDown();
+-  }
+-
+   @Override
+   protected Application configure() {
+ 
+diff --git a/lens-server/src/test/java/org/apache/lens/server/query/TestQueryConstraints.java b/lens-server/src/test/java/org/apache/lens/server/query/TestQueryConstraints.java
+index 8493d85..de281c0 100644
+--- a/lens-server/src/test/java/org/apache/lens/server/query/TestQueryConstraints.java
++++ b/lens-server/src/test/java/org/apache/lens/server/query/TestQueryConstraints.java
+@@ -20,7 +20,8 @@ package org.apache.lens.server.query;
+ 
+ import static org.apache.lens.server.api.LensConfConstants.QUERY_METRIC_UNIQUE_ID_CONF_KEY;
+ 
+-import static org.testng.Assert.*;
++import static org.testng.Assert.assertFalse;
++import static org.testng.Assert.assertTrue;
+ 
+ import java.util.*;
+ 
+@@ -48,16 +49,13 @@ import org.apache.hadoop.conf.Configuration;
+ import org.apache.hadoop.hive.conf.HiveConf;
+ 
+ import org.glassfish.jersey.test.TestProperties;
+-
++import org.testng.annotations.AfterClass;
+ import org.testng.annotations.AfterMethod;
+-import org.testng.annotations.AfterTest;
+-import org.testng.annotations.BeforeTest;
++import org.testng.annotations.BeforeClass;
+ import org.testng.annotations.Test;
+ 
+ import com.beust.jcommander.internal.Lists;
+-
+ import com.google.common.base.Optional;
+-
+ import lombok.extern.slf4j.Slf4j;
+ 
+ /**
+@@ -94,7 +92,7 @@ public class TestQueryConstraints extends LensJerseyTest {
+    *
+    * @see org.glassfish.jersey.test.JerseyTest#setUp()
+    */
+-  @BeforeTest
++  @BeforeClass
+   public void setUp() throws Exception {
+     super.setUp();
+     queryService = LensServices.get().getService(QueryExecutionService.NAME);
+@@ -124,7 +122,7 @@ public class TestQueryConstraints extends LensJerseyTest {
+      *
+      * @see org.glassfish.jersey.test.JerseyTest#tearDown()
+      */
+-  @AfterTest
++  @AfterClass
+   public void tearDown() throws Exception {
+     dropTable(TEST_TABLE);
+     queryService.closeSession(lensSessionId);
+diff --git a/lens-server/src/test/java/org/apache/lens/server/query/TestQueryEndEmailNotifier.java b/lens-server/src/test/java/org/apache/lens/server/query/TestQueryEndEmailNotifier.java
+index 5196c9b..a6c5754 100644
+--- a/lens-server/src/test/java/org/apache/lens/server/query/TestQueryEndEmailNotifier.java
++++ b/lens-server/src/test/java/org/apache/lens/server/query/TestQueryEndEmailNotifier.java
+@@ -82,9 +82,8 @@ public class TestQueryEndEmailNotifier extends LensJerseyTest {
+    *
+    * @see org.glassfish.jersey.test.JerseyTest#setUp()
+    */
+-  @BeforeTest
++  @BeforeClass
+   public void setUp() throws Exception {
+-    super.setUp();
+     wiser = new Wiser();
+     wiser.setHostname("localhost");
+     wiser.setPort(25000);
+@@ -110,12 +109,11 @@ public class TestQueryEndEmailNotifier extends LensJerseyTest {
+    *
+    * @see org.glassfish.jersey.test.JerseyTest#tearDown()
+    */
+-  @AfterTest
++  @AfterClass
+   public void tearDown() throws Exception {
+     wiser.stop();
+     dropTable(TEST_TABLE);
+     queryService.closeSession(lensSessionId);
+-    super.tearDown();
+   }
+ 
+   /*
+diff --git a/lens-server/src/test/java/org/apache/lens/server/query/TestQueryService.java b/lens-server/src/test/java/org/apache/lens/server/query/TestQueryService.java
+index 49de59c..986569d 100644
+--- a/lens-server/src/test/java/org/apache/lens/server/query/TestQueryService.java
++++ b/lens-server/src/test/java/org/apache/lens/server/query/TestQueryService.java
+@@ -119,9 +119,8 @@ public class TestQueryService extends LensJerseyTest {
+    *
+    * @see org.glassfish.jersey.test.JerseyTest#setUp()
+    */
+-  @BeforeTest
++  @BeforeClass
+   public void setUp() throws Exception {
+-    super.setUp();
+     queryService = LensServices.get().getService(QueryExecutionService.NAME);
+     metricsSvc = LensServices.get().getService(MetricsService.NAME);
+     Map<String, String> sessionconf = new HashMap<>();
+@@ -137,7 +136,7 @@ public class TestQueryService extends LensJerseyTest {
+    *
+    * @see org.glassfish.jersey.test.JerseyTest#tearDown()
+    */
+-  @AfterTest
++  @AfterClass
+   public void tearDown() throws Exception {
+     dropTable(TEST_TABLE);
+     queryService.closeSession(lensSessionId);
+@@ -146,7 +145,6 @@ public class TestQueryService extends LensJerseyTest {
+         assertFalse(((HiveDriver) driver).hasLensSession(lensSessionId));
+       }
+     }
+-    super.tearDown();
+   }
+ 
+   /*
+diff --git a/lens-server/src/test/java/org/apache/lens/server/query/TestResultFormatting.java b/lens-server/src/test/java/org/apache/lens/server/query/TestResultFormatting.java
+index f66f89d..e223f82 100644
+--- a/lens-server/src/test/java/org/apache/lens/server/query/TestResultFormatting.java
++++ b/lens-server/src/test/java/org/apache/lens/server/query/TestResultFormatting.java
+@@ -18,9 +18,14 @@
+  */
+ package org.apache.lens.server.query;
+ 
+-import static org.apache.lens.server.LensServerTestUtil.*;
++import static org.apache.lens.server.LensServerTestUtil.createTable;
++import static org.apache.lens.server.LensServerTestUtil.dropTable;
++import static org.apache.lens.server.LensServerTestUtil.loadDataFromClasspath;
+ 
+-import static org.testng.Assert.*;
++import static org.testng.Assert.assertEquals;
++import static org.testng.Assert.assertNotNull;
++import static org.testng.Assert.assertNull;
++import static org.testng.Assert.assertTrue;
+ 
+ import java.io.IOException;
+ import java.util.HashMap;
+@@ -52,8 +57,9 @@ import org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe;
+ import org.glassfish.jersey.media.multipart.FormDataBodyPart;
+ import org.glassfish.jersey.media.multipart.FormDataContentDisposition;
+ import org.glassfish.jersey.media.multipart.FormDataMultiPart;
++import org.testng.annotations.AfterClass;
+ import org.testng.annotations.AfterTest;
+-import org.testng.annotations.BeforeTest;
++import org.testng.annotations.BeforeClass;
+ import org.testng.annotations.Test;
+ 
+ import lombok.extern.slf4j.Slf4j;
+@@ -76,9 +82,8 @@ public class TestResultFormatting extends LensJerseyTest {
+    *
+    * @see org.glassfish.jersey.test.JerseyTest#setUp()
+    */
+-  @BeforeTest
++  @BeforeClass
+   public void setUp() throws Exception {
+-    super.setUp();
+     queryService = LensServices.get().getService(QueryExecutionService.NAME);
+     lensSessionId = queryService.openSession("foo", "bar", new HashMap<String, String>());
+     createTable(testTable, target(), lensSessionId,
+@@ -91,11 +96,10 @@ public class TestResultFormatting extends LensJerseyTest {
+    *
+    * @see org.glassfish.jersey.test.JerseyTest#tearDown()
+    */
+-  @AfterTest
++  @AfterClass
+   public void tearDown() throws Exception {
+     dropTable(testTable, target(), lensSessionId, defaultMT);
+     queryService.closeSession(lensSessionId);
+-    super.tearDown();
+   }
+ 
+   /*
+diff --git a/lens-server/src/test/java/org/apache/lens/server/query/save/TestSavedQueryService.java b/lens-server/src/test/java/org/apache/lens/server/query/save/TestSavedQueryService.java
+index f9bacf1..8ea9912 100644
+--- a/lens-server/src/test/java/org/apache/lens/server/query/save/TestSavedQueryService.java
++++ b/lens-server/src/test/java/org/apache/lens/server/query/save/TestSavedQueryService.java
+@@ -21,7 +21,9 @@ package org.apache.lens.server.query.save;
+ import static org.apache.lens.api.query.save.ParameterCollectionType.SINGLE;
+ import static org.apache.lens.api.query.save.ParameterDataType.STRING;
+ 
+-import static org.testng.Assert.*;
++import static org.testng.Assert.assertEquals;
++import static org.testng.Assert.assertTrue;
++import static org.testng.Assert.fail;
+ 
+ import java.util.List;
+ import java.util.Map;
+@@ -29,11 +31,18 @@ import java.util.Set;
+ 
+ import javax.ws.rs.client.Entity;
+ import javax.ws.rs.client.WebTarget;
+-import javax.ws.rs.core.*;
++import javax.ws.rs.core.Application;
++import javax.ws.rs.core.HttpHeaders;
++import javax.ws.rs.core.MediaType;
++import javax.ws.rs.core.Response;
+ 
+ import org.apache.lens.api.LensSessionHandle;
+ import org.apache.lens.api.jaxb.LensJAXBContextResolver;
+-import org.apache.lens.api.query.save.*;
++import org.apache.lens.api.query.save.ListResponse;
++import org.apache.lens.api.query.save.Parameter;
++import org.apache.lens.api.query.save.ParameterParserResponse;
++import org.apache.lens.api.query.save.ResourceModifiedResponse;
++import org.apache.lens.api.query.save.SavedQuery;
+ import org.apache.lens.server.LensJerseyTest;
+ import org.apache.lens.server.LensServices;
+ import org.apache.lens.server.api.metrics.MetricsService;
+@@ -45,14 +54,13 @@ import org.apache.lens.server.query.QueryExecutionServiceImpl;
+ import org.apache.hadoop.hive.conf.HiveConf;
+ import org.apache.hadoop.hive.ql.session.SessionState;
+ 
+-import org.testng.annotations.AfterTest;
+-import org.testng.annotations.BeforeTest;
++import org.testng.annotations.AfterClass;
++import org.testng.annotations.BeforeClass;
+ import org.testng.annotations.Test;
+ 
+ import com.beust.jcommander.internal.Maps;
+ import com.beust.jcommander.internal.Sets;
+ import com.google.common.collect.Lists;
+-
+ import lombok.extern.slf4j.Slf4j;
+ 
+ @Slf4j
+@@ -90,9 +98,8 @@ public class TestSavedQueryService extends LensJerseyTest {
+     }
+   }
+ 
+-  @BeforeTest
++  @BeforeClass
+   public void setUp() throws Exception {
+-    super.setUp();
+     savedQueryService = LensServices.get().getService(SavedQueryService.NAME);
+     queryService = LensServices.get().getService(QueryExecutionService.NAME);
+     metricsSvc = LensServices.get().getService(MetricsService.NAME);
+@@ -102,11 +109,10 @@ public class TestSavedQueryService extends LensJerseyTest {
+     SessionState.start(new HiveConf());
+   }
+ 
+-  @AfterTest
++  @AfterClass
+   public void tearDown() throws Exception {
+     super.tearDown();
+     queryService.closeSession(lensSessionId);
+-    super.tearDown();
+   }
+ 
+   @Override
+diff --git a/lens-server/src/test/java/org/apache/lens/server/session/TestSessionResource.java b/lens-server/src/test/java/org/apache/lens/server/session/TestSessionResource.java
+index 988fa1d..1dde803 100644
+--- a/lens-server/src/test/java/org/apache/lens/server/session/TestSessionResource.java
++++ b/lens-server/src/test/java/org/apache/lens/server/session/TestSessionResource.java
+@@ -52,7 +52,6 @@ import org.apache.lens.server.common.RestAPITestUtil;
+ import org.apache.lens.server.common.TestResourceFile;
+ 
+ import org.apache.commons.io.FileUtils;
+-
+ import org.apache.hadoop.hive.conf.HiveConf;
+ import org.apache.hadoop.hive.metastore.api.Database;
+ import org.apache.hadoop.hive.ql.metadata.Hive;
+@@ -62,8 +61,8 @@ import org.glassfish.jersey.media.multipart.FormDataContentDisposition;
+ import org.glassfish.jersey.media.multipart.FormDataMultiPart;
+ import org.glassfish.jersey.test.TestProperties;
+ import org.testng.Assert;
+-import org.testng.annotations.AfterTest;
+-import org.testng.annotations.BeforeTest;
++import org.testng.annotations.AfterClass;
++import org.testng.annotations.BeforeClass;
+ import org.testng.annotations.Test;
+ 
+ /**
+@@ -76,24 +75,13 @@ public class TestSessionResource extends LensJerseyTest {
+   /** The metrics svc. */
+   MetricsService metricsSvc;
+ 
+-  /*
+-   * (non-Javadoc)
+-   *
+-   * @see org.glassfish.jersey.test.JerseyTest#setUp()
+-   */
+-  @BeforeTest
++  @BeforeClass
+   public void setUp() throws Exception {
+     metricsSvc = LensServices.get().getService(MetricsService.NAME);
+     LensServices.get().getLogSegregationContext().setLogSegregationId("logid");
+-    super.setUp();
+   }
+ 
+-  /*
+-   * (non-Javadoc)
+-   *
+-   * @see org.glassfish.jersey.test.JerseyTest#tearDown()
+-   */
+-  @AfterTest
++  @AfterClass
+   public void tearDown() throws Exception {
+     super.tearDown();
+   }
+diff --git a/lens-server/src/test/java/org/apache/lens/server/ui/TestSessionUIResource.java b/lens-server/src/test/java/org/apache/lens/server/ui/TestSessionUIResource.java
+index aa28747..7fa2713 100644
+--- a/lens-server/src/test/java/org/apache/lens/server/ui/TestSessionUIResource.java
++++ b/lens-server/src/test/java/org/apache/lens/server/ui/TestSessionUIResource.java
+@@ -32,10 +32,7 @@ import org.apache.lens.server.api.error.LensException;
+ import org.glassfish.jersey.media.multipart.FormDataBodyPart;
+ import org.glassfish.jersey.media.multipart.FormDataContentDisposition;
+ import org.glassfish.jersey.media.multipart.FormDataMultiPart;
+-
+ import org.testng.Assert;
+-import org.testng.annotations.AfterTest;
+-import org.testng.annotations.BeforeTest;
+ import org.testng.annotations.Test;
+ 
+ /**
+@@ -47,26 +44,6 @@ public class TestSessionUIResource extends LensJerseyTest {
+   /*
+    * (non-Javadoc)
+    *
+-   * @see org.glassfish.jersey.test.JerseyTest#setUp()
+-   */
+-  @BeforeTest
+-  public void setUp() throws Exception {
+-    super.setUp();
+-  }
+-
+-  /*
+-   * (non-Javadoc)
+-   *
+-   * @see org.glassfish.jersey.test.JerseyTest#tearDown()
+-   */
+-  @AfterTest
+-  public void tearDown() throws Exception {
+-    super.tearDown();
+-  }
+-
+-  /*
+-   * (non-Javadoc)
+-   *
+    * @see org.glassfish.jersey.test.JerseyTest#configure()
+    */
+   @Override
+-- 
+1.9.1
+
