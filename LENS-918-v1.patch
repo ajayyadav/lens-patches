@@ -1,0 +1,24 @@
+From b390d5894bedfef245e994f9006d63bcbb34df4c Mon Sep 17 00:00:00 2001
+From: Ajay Yadava <ajaynsit@gmail.com>
+Date: Fri, 8 Apr 2016 18:40:01 +0530
+Subject: [PATCH] LENS-918-v1 Changed logsegregationContext.
+
+---
+ .../java/org/apache/lens/server/query/QueryExecutionServiceImpl.java     | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/lens-server/src/main/java/org/apache/lens/server/query/QueryExecutionServiceImpl.java b/lens-server/src/main/java/org/apache/lens/server/query/QueryExecutionServiceImpl.java
+index ad39028..42bd4ab 100644
+--- a/lens-server/src/main/java/org/apache/lens/server/query/QueryExecutionServiceImpl.java
++++ b/lens-server/src/main/java/org/apache/lens/server/query/QueryExecutionServiceImpl.java
+@@ -1334,6 +1334,7 @@ public class QueryExecutionServiceImpl extends BaseLensService implements QueryE
+    * @throws LensException the lens exception
+    */
+   private void rewriteAndSelect(final AbstractQueryContext ctx) throws LensException {
++    logSegregationContext.setLogSegragationAndQueryId(ctx.getLogHandle());
+     MethodMetricsContext parallelCallGauge = MethodMetricsFactory.createMethodGauge(ctx.getConf(), false,
+       PARALLEL_CALL_GAUGE);
+     try {
+-- 
+1.9.1
+
