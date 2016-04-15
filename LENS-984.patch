@@ -1,32 +1,36 @@
-From 06e3feb9b5537d2b46f1427eaaac345fa5cb867c Mon Sep 17 00:00:00 2001
+From a3084d4dfaffd4c15c202c6af20c26e2fc6ce961 Mon Sep 17 00:00:00 2001
 From: Ajay Yadava <ajaynsit@gmail.com>
-Date: Sat, 26 Mar 2016 11:39:21 +0530
-Subject: [PATCH] LENS-984
+Date: Fri, 15 Apr 2016 09:20:22 +0530
+Subject: [PATCH] LENS-984 rebased and tests passed.
 
 ---
- .../apache/lens/cli/commands/LensQueryCommands.java    | 18 +++++++++++++++---
- .../main/java/org/apache/lens/client/LensClient.java   |  5 +++--
- .../java/org/apache/lens/client/LensStatement.java     | 17 ++++++++++-------
- .../apache/lens/server/query/QueryServiceResource.java | 13 ++++++++++---
- 4 files changed, 38 insertions(+), 15 deletions(-)
+ .../lens/cli/commands/LensQueryCommands.java       | 28 +++++++++++++++-------
+ .../java/org/apache/lens/client/LensClient.java    |  5 ++--
+ .../java/org/apache/lens/client/LensStatement.java | 20 +++++++++-------
+ .../lens/server/query/QueryServiceResource.java    | 13 +++++++---
+ .../apache/lens/server/query/TestQueryService.java | 12 ++++++----
+ 5 files changed, 53 insertions(+), 25 deletions(-)
 
 diff --git a/lens-cli/src/main/java/org/apache/lens/cli/commands/LensQueryCommands.java b/lens-cli/src/main/java/org/apache/lens/cli/commands/LensQueryCommands.java
-index 2c7b17f..6649f9d 100644
+index af05951..33207f2 100644
 --- a/lens-cli/src/main/java/org/apache/lens/cli/commands/LensQueryCommands.java
 +++ b/lens-cli/src/main/java/org/apache/lens/cli/commands/LensQueryCommands.java
-@@ -435,10 +435,22 @@ public class LensQueryCommands extends BaseLensCommand {
+@@ -450,18 +450,30 @@ public class LensQueryCommands extends BaseLensCommand {
      @CliOption(key = {"", "prepare_handle"}, mandatory = true, help = "Prepare handle to execute") String phandle,
      @CliOption(key = {"async"}, mandatory = false, unspecifiedDefaultValue = "false",
        specifiedDefaultValue = "true", help = "<async>") boolean async,
 -    @CliOption(key = {"name"}, mandatory = false, help = "<query-name>") String queryName) {
+-    try {
+-      if (async) {
 +    @CliOption(key = {"name"}, mandatory = false, help = "<query-name>") String queryName) throws LensAPIException {
 +    PrettyPrintable cliOutput;
-     if (async) {
--      QueryHandle handle = getClient().executePrepared(QueryPrepareHandle.fromString(phandle), queryName);
--      return handle.getHandleId().toString();
++    if (async) {
 +      try{
-+        QueryHandle handle = getClient().executePrepared(QueryPrepareHandle.fromString(phandle), queryName);
-+        return handle.getHandleId().toString();
+         QueryHandle handle = getClient().executePrepared(QueryPrepareHandle.fromString(phandle), queryName);
+         return handle.getHandleId().toString();
+-      } else {
+-        LensClient.LensClientResultSetWithStats result =
+-            getClient().getResultsFromPrepared(QueryPrepareHandle.fromString(phandle), queryName);
 +      } catch (final LensAPIException e) {
 +
 +        BriefError briefError = new BriefError(e.getLensAPIErrorCode(), e.getLensAPIErrorMessage());
@@ -37,14 +41,24 @@ index 2c7b17f..6649f9d 100644
 +      }
 +      return cliOutput.toPrettyString();
 +
-     } else {
-       try {
-         LensClient.LensClientResultSetWithStats result = getClient().getResultsFromPrepared(
++    } else {
++      try {
++        LensClient.LensClientResultSetWithStats result = getClient().getResultsFromPrepared(
++          QueryPrepareHandle.fromString(phandle), queryName);
+         return formatResultSet(result);
++      } catch (Throwable t) {
++        return t.getMessage();
+       }
+-    } catch (Throwable t) {
+-      return t.getMessage();
+     }
+   }
+ 
 diff --git a/lens-client/src/main/java/org/apache/lens/client/LensClient.java b/lens-client/src/main/java/org/apache/lens/client/LensClient.java
-index ea0cd76..0d6525a 100644
+index 9626820..356ccd7 100644
 --- a/lens-client/src/main/java/org/apache/lens/client/LensClient.java
 +++ b/lens-client/src/main/java/org/apache/lens/client/LensClient.java
-@@ -592,12 +592,13 @@ public class LensClient {
+@@ -615,12 +615,13 @@ public class LensClient {
      return statement.getPreparedQuery(phandle);
    }
  
@@ -61,45 +75,47 @@ index ea0cd76..0d6525a 100644
    }
  
 diff --git a/lens-client/src/main/java/org/apache/lens/client/LensStatement.java b/lens-client/src/main/java/org/apache/lens/client/LensStatement.java
-index 33c26e1..1abe84b 100644
+index f06bcd1..aba0427 100644
 --- a/lens-client/src/main/java/org/apache/lens/client/LensStatement.java
 +++ b/lens-client/src/main/java/org/apache/lens/client/LensStatement.java
-@@ -109,8 +109,9 @@ public class LensStatement {
+@@ -92,7 +92,8 @@ public class LensStatement {
     * @param queryName              the query name
     * @return the query handle
     */
 -  public QueryHandle executeQuery(QueryPrepareHandle phandle, boolean waitForQueryToComplete, String queryName) {
--    QueryHandle handle = executeQuery(phandle, queryName);
 +  public QueryHandle executeQuery(QueryPrepareHandle phandle, boolean waitForQueryToComplete,
 +                                  String queryName) throws LensAPIException {
-+    QueryHandle handle = executeQuery(phandle, queryName).getData();
+     QueryHandle handle = submitQuery(phandle, queryName);
  
      if (waitForQueryToComplete) {
-       waitForQueryToComplete(handle);
-@@ -328,9 +329,9 @@ public class LensStatement {
-    * @param queryName the query name
+@@ -364,9 +365,10 @@ public class LensStatement {
     * @return the query handle
+    * @throws LensAPIException
     */
--  public QueryHandle executeQuery(QueryPrepareHandle phandle, String queryName) {
-+  public LensAPIResult<QueryHandle> executeQuery(QueryPrepareHandle phandle, String queryName) throws LensAPIException {
+-  private QueryHandle submitQuery(QueryPrepareHandle phandle, String queryName) {
++  private QueryHandle submitQuery(QueryPrepareHandle phandle,
++                                                  String queryName) throws LensAPIException {
      if (!connection.isOpen()) {
 -      throw new IllegalStateException("Lens Connection has to be " + "established before querying");
 +      throw new IllegalStateException("Lens Connection has to be established before querying");
      }
  
      Client client = connection.buildClient();
-@@ -343,10 +344,12 @@ public class LensStatement {
+@@ -379,11 +381,13 @@ public class LensStatement {
        : queryName));
      mp.bodyPart(new FormDataBodyPart(FormDataContentDisposition.name("conf").fileName("conf").build(), new LensConf(),
        MediaType.APPLICATION_XML_TYPE));
 -    QueryHandle handle = target.request()
--      .post(Entity.entity(mp, MediaType.MULTIPART_FORM_DATA_TYPE), QueryHandle.class);
+-        .post(Entity.entity(mp, MediaType.MULTIPART_FORM_DATA_TYPE), QueryHandle.class);
+-
+-    this.query = new ProxyLensQuery(this, handle);
+-    return handle;
 +    Response response = target.request().post(Entity.entity(mp, MediaType.MULTIPART_FORM_DATA_TYPE));
 +    if (response.getStatus() == Response.Status.OK.getStatusCode()) {
-+      return response.readEntity(new GenericType<LensAPIResult<QueryHandle>>() {});
++      QueryHandle handle = response.readEntity(new GenericType<LensAPIResult<QueryHandle>>() {}).getData();
++      this.query = new ProxyLensQuery(this, handle);
++      return handle;
 +    }
- 
--    return handle;
 +    throw new LensAPIException(response.readEntity(LensAPIResult.class));
    }
  
@@ -149,6 +165,44 @@ index a043550..6296bb3 100644
      } catch (LensException e) {
        throw new WebApplicationException(e);
      }
+diff --git a/lens-server/src/test/java/org/apache/lens/server/query/TestQueryService.java b/lens-server/src/test/java/org/apache/lens/server/query/TestQueryService.java
+index df13ba2..ca0f1c0 100644
+--- a/lens-server/src/test/java/org/apache/lens/server/query/TestQueryService.java
++++ b/lens-server/src/test/java/org/apache/lens/server/query/TestQueryService.java
+@@ -526,13 +526,15 @@ public class TestQueryService extends LensJerseyTest {
+     assertEquals(ctx.getConf().getProperties().get("my.property"), "myvalue");
+ 
+     QueryHandle handle1 = target.path(pHandle.toString()).request(mt)
+-      .post(Entity.entity(confpart, MediaType.MULTIPART_FORM_DATA_TYPE), QueryHandle.class);
++      .post(Entity.entity(confpart, MediaType.MULTIPART_FORM_DATA_TYPE),
++        new GenericType<LensAPIResult<QueryHandle>>() {}).getData();
+ 
+     // Override query name
+     confpart.bodyPart(new FormDataBodyPart(FormDataContentDisposition.name("queryName").build(), "testQueryName2"));
+     // do post once again
+     QueryHandle handle2 = target.path(pHandle.toString()).request(mt)
+-      .post(Entity.entity(confpart, MediaType.MULTIPART_FORM_DATA_TYPE), QueryHandle.class);
++      .post(Entity.entity(confpart, MediaType.MULTIPART_FORM_DATA_TYPE),
++        new GenericType<LensAPIResult<QueryHandle>>() {}).getData();
+     assertNotEquals(handle1, handle2);
+ 
+     LensQuery ctx1 = waitForQueryToFinish(target(), lensSessionId, handle1, Status.SUCCESSFUL, mt);
+@@ -602,11 +604,13 @@ public class TestQueryService extends LensJerseyTest {
+     assertEquals(ctx.getConf().getProperties().get("my.property"), "myvalue");
+ 
+     QueryHandle handle1 = target.path(plan.getPrepareHandle().toString()).request(mt)
+-      .post(Entity.entity(confpart, MediaType.MULTIPART_FORM_DATA_TYPE), QueryHandle.class);
++      .post(Entity.entity(confpart, MediaType.MULTIPART_FORM_DATA_TYPE),
++        new GenericType<LensAPIResult<QueryHandle>>() {}).getData();
+ 
+     // do post once again
+     QueryHandle handle2 = target.path(plan.getPrepareHandle().toString()).request(mt)
+-      .post(Entity.entity(confpart, MediaType.MULTIPART_FORM_DATA_TYPE), QueryHandle.class);
++      .post(Entity.entity(confpart, MediaType.MULTIPART_FORM_DATA_TYPE),
++        new GenericType<LensAPIResult<QueryHandle>>() {}).getData();
+     assertNotEquals(handle1, handle2);
+ 
+     waitForQueryToFinish(target(), lensSessionId, handle1, Status.SUCCESSFUL, mt);
 -- 
 1.9.1
 
