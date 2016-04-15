@@ -1,0 +1,1451 @@
+From 820fcdd8da6dbe47d87301c31098be5def911fb4 Mon Sep 17 00:00:00 2001
+From: Ajay Yadava <ajaynsit@gmail.com>
+Date: Tue, 1 Mar 2016 23:49:54 +0530
+Subject: [PATCH] little more progress on the scheduler.
+
+---
+ .../apache/lens/api/query/SchedulerJobInfo.java    |   6 -
+ .../server/api/scheduler/SchedulerService.java     |  16 +-
+ .../lens/server/scheduler/InstanceState.java       | 173 +++++++++++++
+ .../org/apache/lens/server/scheduler/JobState.java | 154 ++++++++++++
+ .../lens/server/scheduler/LensScheduler.java       |  89 +++++++
+ .../lens/server/scheduler/ScheduleResource.java    | 267 ++++++++++++++++++++-
+ .../server/scheduler/SchedulerServiceImpl.java     | 121 ++++++++--
+ .../apache/lens/server/scheduler/StateMachine.java |  18 ++
+ .../notification/services/AlarmService.java        |  25 ++
+ .../services/DataAvailabilityService.java          |  26 ++
+ .../server/scheduler/store/HSQLStateStore.java     |  46 ++++
+ .../lens/server/scheduler/store/SchedulerDAO.java  | 172 +++++++++++++
+ .../lens/server/scheduler/store/StateStore.java    |  41 ++++
+ 13 files changed, 1121 insertions(+), 33 deletions(-)
+ create mode 100644 lens-server/src/main/java/org/apache/lens/server/scheduler/InstanceState.java
+ create mode 100644 lens-server/src/main/java/org/apache/lens/server/scheduler/JobState.java
+ create mode 100644 lens-server/src/main/java/org/apache/lens/server/scheduler/LensScheduler.java
+ create mode 100644 lens-server/src/main/java/org/apache/lens/server/scheduler/StateMachine.java
+ create mode 100644 lens-server/src/main/java/org/apache/lens/server/scheduler/notification/services/AlarmService.java
+ create mode 100644 lens-server/src/main/java/org/apache/lens/server/scheduler/notification/services/DataAvailabilityService.java
+ create mode 100644 lens-server/src/main/java/org/apache/lens/server/scheduler/store/HSQLStateStore.java
+ create mode 100644 lens-server/src/main/java/org/apache/lens/server/scheduler/store/SchedulerDAO.java
+ create mode 100644 lens-server/src/main/java/org/apache/lens/server/scheduler/store/StateStore.java
+
+diff --git a/lens-api/src/main/java/org/apache/lens/api/query/SchedulerJobInfo.java b/lens-api/src/main/java/org/apache/lens/api/query/SchedulerJobInfo.java
+index 92260b5..b0c44be 100644
+--- a/lens-api/src/main/java/org/apache/lens/api/query/SchedulerJobInfo.java
++++ b/lens-api/src/main/java/org/apache/lens/api/query/SchedulerJobInfo.java
+@@ -61,10 +61,4 @@ public class SchedulerJobInfo {
+    */
+   private long createdOn;
+ 
+-  /**
+-   * @param modifiedOn time to be set as modifiedOn time for this job.
+-   * @return last modified time for this job
+-   */
+-  private long modifiedOn;
+-
+ }
+diff --git a/lens-server-api/src/main/java/org/apache/lens/server/api/scheduler/SchedulerService.java b/lens-server-api/src/main/java/org/apache/lens/server/api/scheduler/SchedulerService.java
+index b6ec093..38f8882 100644
+--- a/lens-server-api/src/main/java/org/apache/lens/server/api/scheduler/SchedulerService.java
++++ b/lens-server-api/src/main/java/org/apache/lens/server/api/scheduler/SchedulerService.java
+@@ -36,6 +36,9 @@ import org.apache.lens.server.api.error.LensException;
+  */
+ public interface SchedulerService {
+ 
++  /** The constant NAME */
++  public static final String NAME = "scheduler";
++
+   /**
+    * Submit a job.
+    *
+@@ -108,11 +111,9 @@ public interface SchedulerService {
+    *
+    * @param sessionHandle handle for the current session.
+    * @param jobHandle     handle for the job
+-   * @param expiryTime    time after which the job shouldn't execute.
+    * @throws LensException the lens exception
+    */
+-  void expireJob(LensSessionHandle sessionHandle, SchedulerJobHandle jobHandle,
+-                 Date expiryTime) throws LensException;
++  void expireJob(LensSessionHandle sessionHandle, SchedulerJobHandle jobHandle) throws LensException;
+ 
+ 
+   /**
+@@ -159,16 +160,13 @@ public interface SchedulerService {
+    *                      if null no entries will be removed from result
+    * @param user          filter for user who submitted the job, if specified only jobs submitted by the given user
+    *                      will be returned, if not specified no entries will be removed from result on basis of userName
+-   * @param jobName       filter for jobName, if specified only the jobs with name same as given name will be considered
+-   *                      , else no jobs will be filtered out on the basis of name.
+    * @param startTime     if specified only instances with scheduleTime after this time will be considered.
+    * @param endTime       if specified only instances with scheduleTime before this time will be considered.
+    * @return A collection of stats per job
+    * @throws LensException
+    */
+   Collection<SchedulerJobStats> getAllJobStats(LensSessionHandle sessionHandle,
+-                                      String state, String user,
+-                                      String jobName, long startTime, long endTime) throws LensException;
++                                      String state, String user, long startTime, long endTime) throws LensException;
+ 
+   /**
+    * Returns stats for a job.
+@@ -191,10 +189,10 @@ public interface SchedulerService {
+    * @param sessionHandle handle for the session.
+    * @param jobHandle     handle for the job
+    * @param numResults    - number of results to be returned, default 100.
+-   * @return list of instance ids for the job
++   * @return list of instances for the job
+    * @throws LensException the lens exception
+    */
+-  List<String> getJobInstances(LensSessionHandle sessionHandle,
++  List<SchedulerJobInstanceInfo> getJobInstances(LensSessionHandle sessionHandle,
+                                SchedulerJobHandle jobHandle, Long numResults) throws LensException;
+ 
+   /**
+diff --git a/lens-server/src/main/java/org/apache/lens/server/scheduler/InstanceState.java b/lens-server/src/main/java/org/apache/lens/server/scheduler/InstanceState.java
+new file mode 100644
+index 0000000..85bc265
+--- /dev/null
++++ b/lens-server/src/main/java/org/apache/lens/server/scheduler/InstanceState.java
+@@ -0,0 +1,173 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ * <p/>
++ * http://www.apache.org/licenses/LICENSE-2.0
++ * <p/>
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package org.apache.lens.server.scheduler;
++
++/**
++ * This is a wrapper class for instance state and its associated events.
++ * It contains STATE which represents instance state and EVENT which represent
++ * instance related events.
++ */
++public class InstanceState {
++
++  // what all does an instance state contain? - a query, it's triggers?, its attempts count? statistics?
++  // log all the times when data becomes available.
++
++  public static final STATE INITIAL_STATE = STATE.PREPARED;
++  /**
++   * All events related to an instance of a scheduler job.
++   */
++  public enum EVENT {
++    //NOTE: currently there are no data availability triggers so timed_out event has not been created.
++    TRIGGER_AVAILABLE,
++    SCHEDULED,
++    KILLED,
++    SUCCEEDED,
++    FAILED
++  }
++
++  public enum STATE implements StateMachine<STATE, EVENT> {
++
++    PREPARED { // the scheduler will spawn a few future instances for efficiency purposes, they will be in this state.
++      @Override
++      public InstanceState.STATE onEvent(EVENT event) {
++        switch (event) {
++
++          case SCHEDULED:
++            break;
++
++          case KILLED:
++            break;
++
++          case FAILED:
++            break;
++        }
++        return null;
++      }
++    },
++
++    READY { // when all trigger conditions are met but still not scheduled (e.g. for throttling reasons)
++      @Override
++      public InstanceState.STATE onEvent(EVENT event) {
++        switch (event) {
++
++        case SCHEDULED:
++          break;
++
++        case KILLED:
++          break;
++
++        case FAILED:
++          break;
++        }
++        return null;
++      }
++    },
++
++    WAITING { // when instance is ready to be scheduled but is waiting for some triggers to be available
++      @Override
++      public InstanceState.STATE onEvent(EVENT event) {
++        switch (event) {
++
++          case SCHEDULED:
++            break;
++
++          case KILLED:
++            break;
++
++          case FAILED:
++            break;
++        }
++        return null;
++      }
++    },
++
++    RUNNING { // when all triggers are met and instance is executing
++      @Override
++      public InstanceState.STATE onEvent(EVENT event) {
++        switch (event) {
++
++          case SCHEDULED:
++            break;
++
++          case KILLED:
++            break;
++
++          case FAILED:
++            break;
++        }
++        return null;
++      }
++    },
++
++    KILLED { // when a non-terminal state instance is killed, for terminal instances kill is a no-op
++      @Override
++      public InstanceState.STATE onEvent(EVENT event) {
++        switch (event) {
++
++          case SCHEDULED:
++            break;
++
++          case KILLED:
++            break;
++
++          case FAILED:
++            break;
++        }
++        return null;
++      }
++    },
++
++    SUCCEEDED { // when an instance finishes successfully.
++      @Override
++      public InstanceState.STATE onEvent(EVENT event) {
++        switch (event) {
++
++          case SCHEDULED:
++            break;
++
++          case KILLED:
++            break;
++
++          case FAILED:
++            break;
++        }
++        return null;
++      }
++    },
++
++
++    FAILED { // when a running instance meets some errors, it reaches in this state.
++      @Override
++      public InstanceState.STATE onEvent(EVENT event) {
++        switch (event) {
++
++          case SCHEDULED:
++            break;
++
++          case KILLED:
++            break;
++
++          case FAILED:
++            break;
++        }
++        return null;
++      }
++    }
++  }
++}
+diff --git a/lens-server/src/main/java/org/apache/lens/server/scheduler/JobState.java b/lens-server/src/main/java/org/apache/lens/server/scheduler/JobState.java
+new file mode 100644
+index 0000000..6517873
+--- /dev/null
++++ b/lens-server/src/main/java/org/apache/lens/server/scheduler/JobState.java
+@@ -0,0 +1,154 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ * <p/>
++ * http://www.apache.org/licenses/LICENSE-2.0
++ * <p/>
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package org.apache.lens.server.scheduler;
++
++/**
++ * This is a wrapper class for job state and its associated events.
++ * It contains STATE which represents instance state and EVENT which represent
++ * scheduler job related events.
++ */
++public class JobState {
++
++
++  public static final STATE INITIAL_STATE = STATE.SUBMITTED;
++
++  /**
++   * All events related to an instance of a scheduler job.
++   */
++  public enum EVENT {
++    SUBMITTED,
++    SCHEDULED,
++    DELETED,
++    EXPIRED,
++    SUSPENDED,
++    RESUMED
++  }
++
++  public enum STATE implements StateMachine<STATE, EVENT> {
++    SUBMITTED {
++      @Override
++      public STATE onEvent(EVENT event) {
++        switch (event) {
++
++          case SCHEDULED:
++            break;
++
++          case DELETED:
++            break;
++
++          case SUSPENDED:
++            break;
++        }
++        return null;
++      }
++    },
++
++    SCHEDULED {
++      @Override
++      public STATE onEvent(EVENT event) {
++        switch (event) {
++
++          case SCHEDULED:
++            break;
++
++          case DELETED:
++            break;
++
++          case SUSPENDED:
++            break;
++        }
++        return null;
++      }
++    },
++
++    SUSPENDED {
++      @Override
++      public STATE onEvent(EVENT event) {
++        switch (event) {
++
++          case SCHEDULED:
++            break;
++
++          case DELETED:
++            break;
++
++          case SUSPENDED:
++            break;
++        }
++        return null;
++      }
++    },
++
++
++    EXPIRED {
++      @Override
++      public STATE onEvent(EVENT event) {
++        switch (event) {
++
++          case SCHEDULED:
++            break;
++
++          case DELETED:
++            break;
++
++          case SUSPENDED:
++            break;
++        }
++        return null;
++      }
++    },
++
++    COMPLETED {
++      @Override
++      public STATE onEvent(EVENT event) {
++        switch (event) {
++
++          case SCHEDULED:
++            break;
++
++          case DELETED:
++            break;
++
++          case SUSPENDED:
++            break;
++        }
++        return null;
++      }
++    },
++
++    DELETED {
++      @Override
++      public STATE onEvent(EVENT event) {
++        switch (event) {
++
++          case SCHEDULED:
++            break;
++
++          case DELETED:
++            break;
++
++          case SUSPENDED:
++            break;
++        }
++        return null;
++      }
++    }
++
++  }
++}
+diff --git a/lens-server/src/main/java/org/apache/lens/server/scheduler/LensScheduler.java b/lens-server/src/main/java/org/apache/lens/server/scheduler/LensScheduler.java
+new file mode 100644
+index 0000000..88731e0
+--- /dev/null
++++ b/lens-server/src/main/java/org/apache/lens/server/scheduler/LensScheduler.java
+@@ -0,0 +1,89 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ * <p/>
++ * http://www.apache.org/licenses/LICENSE-2.0
++ * <p/>
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package org.apache.lens.server.scheduler;
++
++import org.apache.lens.api.query.SchedulerJobHandle;
++import org.apache.lens.api.scheduler.XFrequency;
++import org.apache.lens.api.scheduler.XJob;
++import org.apache.lens.server.LensServices;
++import org.apache.lens.server.metastore.JAXBUtils;
++import org.apache.lens.server.query.QueryExecutionServiceImpl;
++
++import javax.xml.datatype.XMLGregorianCalendar;
++import java.util.Date;
++
++/**
++ * Scheduler design doc??
++ * Notification services
++ * How the flow works?
++ * How is it plugable?
++ * How are various notification services plugable?
++ * What are the db schemas associated with scheduler?
++ * How is recoverability?
++ * Execution orders?
++ * State machine & State transition diagrams?
++ */
++public final class LensScheduler {
++
++  // list of services for scheduler.
++  // submitted -> scheduled -> expired ->
++  // scheduler accepts query schedule commands.
++  // then a thread keeps spawning instances of each job and registers them for their specific notification requests.
++  // each notification service notifies scheduler of a trigger availability. Once the trigger is available then
++  // scheduler checks if all required conditions are met, if yes then the scheduler puts instance in ready state.
++  // once the instance is in ready state, if there are no throttling limits or other prioritisation constraints
++  // the instance is executed and moved to Running state.
++
++  // Scheduler has following main tasks -
++  // 1. accept schedule requests.
++  // 2. keep spawning new instances
++  // 3. listen for notifications
++  // 4. check for throttling / prioritisation constraints
++  // 5. schedule the instances.
++  // 6. listen for the completion notifications.
++  //
++  private static final LensScheduler INSTANCE = new LensScheduler();
++
++  // private constructor to ensure single instance.
++  private LensScheduler(){}
++
++  /**
++   *
++   * @return the singleton instance of the scheduler.
++   */
++  public static LensScheduler get(){
++    return INSTANCE;
++  }
++
++  public void schedule(SchedulerJobHandle handle, XJob job) {
++    // validate that the job is not already in scheduled state by querying using handle
++    // update the state to scheduled, release lock.
++    // find its trigger services & register for its trigger services
++    XFrequency frequency = job.getTrigger().getFrequency();
++    Date start = JAXBUtils.getDateFromXML(job.getStartTime());
++    Date end = JAXBUtils.getDateFromXML(job.getEndTime());
++
++    // handle the notifications from the trigger services
++    // once the time is up, you execute the query using queryService submit
++    LensServices.get().getService(QueryExecutionServiceImpl.NAME);
++  }
++
++
++
++}
+diff --git a/lens-server/src/main/java/org/apache/lens/server/scheduler/ScheduleResource.java b/lens-server/src/main/java/org/apache/lens/server/scheduler/ScheduleResource.java
+index abc4621..ec19a96 100644
+--- a/lens-server/src/main/java/org/apache/lens/server/scheduler/ScheduleResource.java
++++ b/lens-server/src/main/java/org/apache/lens/server/scheduler/ScheduleResource.java
+@@ -18,20 +18,281 @@
+  */
+ package org.apache.lens.server.scheduler;
+ 
++import java.util.Collection;
++import java.util.Date;
++import java.util.List;
++import javax.ws.rs.BadRequestException;
++import javax.ws.rs.Consumes;
++import javax.ws.rs.DELETE;
+ import javax.ws.rs.GET;
++import javax.ws.rs.POST;
++import javax.ws.rs.PUT;
+ import javax.ws.rs.Path;
++import javax.ws.rs.PathParam;
+ import javax.ws.rs.Produces;
++import javax.ws.rs.QueryParam;
++import javax.ws.rs.WebApplicationException;
+ import javax.ws.rs.core.MediaType;
+ 
++import org.apache.lens.api.APIResult;
++import org.apache.lens.api.LensSessionHandle;
++import org.apache.lens.api.query.SchedulerJobHandle;
++import org.apache.lens.api.query.SchedulerJobInfo;
++import org.apache.lens.api.query.SchedulerJobInstanceHandle;
++import org.apache.lens.api.query.SchedulerJobInstanceInfo;
++import org.apache.lens.api.scheduler.XJob;
++import org.apache.lens.server.LensServices;
++import org.apache.lens.server.api.error.LensException;
++import org.apache.lens.server.api.scheduler.SchedulerJobStats;
++import org.apache.lens.server.api.scheduler.SchedulerService;
++
+ /**
+- * The Class ScheduleResource.
++ * REST end point for all scheduler operations.
+  */
+-@Path("/queryscheduler")
++@Path("scheduler")
+ public class ScheduleResource {
+ 
++  public static SchedulerService getSchedulerService() {
++    return LensServices.get().getService(SchedulerService.NAME);
++  }
++
++  private static void checkSessionId(LensSessionHandle sessionHandle) {
++    if (sessionHandle == null) {
++      throw new BadRequestException("Invalid session handle");
++    }
++  }
++
+   @GET
+   @Produces(MediaType.TEXT_PLAIN)
+   public String getMessage() {
+-    return "Hello World! from scheduler";
++    return "Scheduler is running.";
++  }
++
++  @PUT
++  @Consumes({MediaType.MULTIPART_FORM_DATA})
++  @Produces({MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML, MediaType.TEXT_PLAIN})
++  @Path("job/submit")
++  public SchedulerJobHandle submitJob(@QueryParam("sessionid") LensSessionHandle sessionId, XJob job) {
++    checkSessionId(sessionId);
++    try {
++      return getSchedulerService().submitJob(sessionId, job);
++    } catch (LensException e) {
++      throw new WebApplicationException(e);
++    }
++  }
++
++  @POST
++  @Produces({MediaType.APPLICATION_JSON})
++  @Path("job/schedule")
++  public APIResult scheduleJob(@QueryParam("sessionid") LensSessionHandle sessionId,
++                               @QueryParam("jobhandle") SchedulerJobHandle jobHandle) {
++    checkSessionId(sessionId);
++    try {
++      getSchedulerService().scheduleJob(sessionId, jobHandle);
++    } catch (LensException e) {
++      throw new WebApplicationException(e);
++    }
++    return APIResult.success();
++  }
++
++  @PUT
++  @Produces({MediaType.APPLICATION_JSON})
++  @Path("job/submit-and-schedule")
++  public SchedulerJobHandle submitAndScheduleJob(@QueryParam("sessionid") LensSessionHandle sessionId, XJob job) {
++    checkSessionId(sessionId);
++    try {
++      return getSchedulerService().submitAndScheduleJob(sessionId, job);
++    } catch (LensException e) {
++      throw new WebApplicationException(e);
++    }
++  }
++
++  @GET
++  @Produces({MediaType.APPLICATION_XML, MediaType.APPLICATION_JSON})
++  @Path("job/definition")
++  public XJob getJobDefinition(@QueryParam("sessionid") LensSessionHandle sessionId,
++                                 @QueryParam("jobhandle") SchedulerJobHandle jobHandle) {
++
++    try {
++      return getSchedulerService().getJobDefinition(sessionId, jobHandle);
++    } catch (LensException e) {
++      throw new WebApplicationException(e);
++    }
++  }
++
++  @GET
++  @Produces({MediaType.APPLICATION_JSON})
++  @Path("job/details")
++  public SchedulerJobInfo getJobDetails(@QueryParam("sessionid") LensSessionHandle sessionId,
++                                        @QueryParam("jobhandle") SchedulerJobHandle jobHandle) {
++    checkSessionId(sessionId);
++    try {
++      return getSchedulerService().getJobDetails(sessionId, jobHandle);
++    } catch (LensException e) {
++      throw new WebApplicationException(e);
++    }
++  }
++
++  @POST
++  @Produces({MediaType.APPLICATION_JSON})
++  @Path("job/update")
++  public APIResult updateJob(@QueryParam("sessionid") LensSessionHandle sessionId,
++                           @QueryParam("jobhandle") SchedulerJobHandle jobHandle,
++                           XJob job) {
++    checkSessionId(sessionId);
++    try {
++      getSchedulerService().updateJob(sessionId, jobHandle, job);
++    } catch (LensException e) {
++      throw new WebApplicationException(e);
++    }
++    return APIResult.success();
++  }
++
++  @POST
++  @Produces({MediaType.APPLICATION_JSON})
++  @Path("job/expire")
++  public APIResult expireJob(@QueryParam("sessionid") LensSessionHandle sessionId,
++                             @QueryParam("jobhandle") SchedulerJobHandle jobHandle,
++                             @QueryParam("expirytime") Date expiryTime) {
++    checkSessionId(sessionId);
++    try {
++      getSchedulerService().expireJob(sessionId, jobHandle, expiryTime);
++    } catch (LensException e) {
++      throw new WebApplicationException(e);
++    }
++    return APIResult.success();
++  }
++
++  @POST
++  @Produces({MediaType.APPLICATION_JSON})
++  @Path("job/suspend")
++  public APIResult suspendJob(@QueryParam("sessionid") LensSessionHandle sessionId,
++                              @QueryParam("jobhandle") SchedulerJobHandle jobHandle) {
++    checkSessionId(sessionId);
++    try {
++      getSchedulerService().suspendJob(sessionId, jobHandle);
++    } catch (LensException e) {
++      throw new WebApplicationException(e);
++    }
++    return APIResult.success();
++  }
++
++  @POST
++  @Produces({MediaType.APPLICATION_JSON})
++  @Path("job/resume")
++  public APIResult resumeJob(@QueryParam("sessionid") LensSessionHandle sessionId,
++                             @QueryParam("jobhandle") SchedulerJobHandle jobHandle,
++                             @QueryParam("effectivetime") Date effectiveTime) {
++    checkSessionId(sessionId);
++    try {
++      getSchedulerService().resumeJob(sessionId, jobHandle, effectiveTime);
++    } catch (LensException e) {
++      throw new WebApplicationException(e);
++    }
++    return APIResult.success();
++  }
++
++  @DELETE
++  @Produces({MediaType.APPLICATION_JSON})
++  @Path("job/delete")
++  public APIResult deleteJob(@QueryParam("sessionid") LensSessionHandle sessionId,
++                             @QueryParam("jobhandle") SchedulerJobHandle jobHandle) {
++    checkSessionId(sessionId);
++    try {
++      getSchedulerService().deleteJob(sessionId, jobHandle);
++    } catch (LensException e) {
++      throw new WebApplicationException(e);
++    }
++    return APIResult.success();
++  }
++
++  @GET
++  @Produces({MediaType.APPLICATION_JSON})
++  @Path("job/stats")
++  public Collection<SchedulerJobStats> getAllJobStats(@QueryParam("sessionid") LensSessionHandle sessionId,
++                                                      @QueryParam("state") String state,
++                                                      @QueryParam("name") String jobName,
++                                                      @QueryParam("user") String user,
++                                                      @QueryParam("start") Date start,
++                                                      @QueryParam("end") Date end) {
++    checkSessionId(sessionId);
++    try {
++      return getSchedulerService().getAllJobStats(sessionId, state, user, jobName, start.getTime(), end.getTime());
++    } catch (LensException e) {
++      throw new WebApplicationException(e);
++    }
++  }
++
++  @GET
++  @Produces({MediaType.APPLICATION_JSON})
++  @Path("job/{jobhandle}/stats/")
++  public SchedulerJobStats getJobStats(@PathParam("jobhandle") SchedulerJobHandle jobHandle,
++                                       @QueryParam("sessionid") LensSessionHandle sessionId,
++                                       @QueryParam("state") String state,
++                                       @QueryParam("name") String jobName,
++                                       @QueryParam("user") String user,
++                                       @QueryParam("start") Date start,
++                                       @QueryParam("end") Date end) {
++    checkSessionId(sessionId);
++    try {
++      return getSchedulerService().getJobStats(sessionId, jobHandle, state, start.getTime(), end.getTime());
++    } catch (LensException e) {
++      throw new WebApplicationException(e);
++    }
++  }
++
++  @GET
++  @Produces({MediaType.APPLICATION_JSON})
++  @Path("job/{jobhandle}/instances/")
++  public List<String> getJobInstances(@QueryParam("sessionid") LensSessionHandle sessionId,
++                                      @PathParam("jobhandle") SchedulerJobHandle jobHandle,
++                                      @QueryParam("numresults") Long numResults) {
++    checkSessionId(sessionId);
++    try {
++      return getSchedulerService().getJobInstances(sessionId, jobHandle, numResults);
++    } catch (LensException e) {
++      throw new WebApplicationException(e);
++    }
++  }
++
++  @POST
++  @Produces({MediaType.APPLICATION_JSON})
++  @Path("instance/{instancehandle}/kill")
++  public APIResult killInstance(@QueryParam("sessionid") LensSessionHandle sessionId,
++                                @PathParam("instancehandle") SchedulerJobInstanceHandle instanceHandle) {
++    checkSessionId(sessionId);
++    try {
++      getSchedulerService().killInstance(sessionId, instanceHandle);
++    } catch (LensException e) {
++      throw new WebApplicationException(e);
++    }
++    return APIResult.success();
++  }
++
++  @POST
++  @Produces({MediaType.APPLICATION_JSON})
++  @Path("instance/{instancehandle}/rerun")
++  public APIResult rerunInstance(@QueryParam("sessionid") LensSessionHandle sessionId,
++                                 @PathParam("instancehandle") SchedulerJobInstanceHandle instanceHandle) {
++    checkSessionId(sessionId);
++    try {
++      getSchedulerService().rerunInstance(sessionId, instanceHandle);
++    } catch (LensException e) {
++      throw new WebApplicationException(e);
++    }
++    return APIResult.success();
++  }
++
++  @GET
++  @Produces({MediaType.APPLICATION_JSON})
++  @Path("instance/{instancehandle}/details")
++  public SchedulerJobInstanceInfo getInstanceDetails(@QueryParam("sessionid") LensSessionHandle sessionId,
++                                   @PathParam("instancehandle") SchedulerJobInstanceHandle instanceHandle) {
++    checkSessionId(sessionId);
++    try {
++      return getSchedulerService().getInstanceDetails(sessionId, instanceHandle);
++    } catch (LensException e) {
++      throw new WebApplicationException(e);
++    }
+   }
+ }
+diff --git a/lens-server/src/main/java/org/apache/lens/server/scheduler/SchedulerServiceImpl.java b/lens-server/src/main/java/org/apache/lens/server/scheduler/SchedulerServiceImpl.java
+index ce98601..1f50369 100644
+--- a/lens-server/src/main/java/org/apache/lens/server/scheduler/SchedulerServiceImpl.java
++++ b/lens-server/src/main/java/org/apache/lens/server/scheduler/SchedulerServiceImpl.java
+@@ -21,7 +21,9 @@ package org.apache.lens.server.scheduler;
+ import java.util.Collection;
+ import java.util.Date;
+ import java.util.List;
++import java.util.UUID;
+ 
++import org.apache.commons.lang3.StringUtils;
+ import org.apache.lens.api.LensSessionHandle;
+ import org.apache.lens.api.query.SchedulerJobHandle;
+ import org.apache.lens.api.query.SchedulerJobInfo;
+@@ -35,11 +37,19 @@ import org.apache.lens.server.api.scheduler.SchedulerJobStats;
+ import org.apache.lens.server.api.scheduler.SchedulerService;
+ 
+ import org.apache.hive.service.cli.CLIService;
++import org.apache.lens.server.scheduler.store.SchedulerDAO;
++import org.apache.lens.server.session.LensSessionImpl;
++import org.apache.lens.server.util.UtilityMethods;
++
+ /**
+- * The Class QuerySchedulerService.
++ * This class handles all the scheduler operations.
+  */
+ public class SchedulerServiceImpl extends BaseLensService implements SchedulerService {
+ 
++  // get the state store
++  private SchedulerDAO schedulerDAO;
++
++  private LensScheduler scheduler;
+   /**
+    * The constant name for scheduler service.
+    */
+@@ -52,6 +62,14 @@ public class SchedulerServiceImpl extends BaseLensService implements SchedulerSe
+    */
+   public SchedulerServiceImpl(CLIService cliService) {
+     super(NAME, cliService);
++    this.schedulerDAO = new SchedulerDAO();
++    this.scheduler = LensScheduler.get();
++  }
++
++  public SchedulerServiceImpl(CLIService cliService, SchedulerDAO schedulerDAO) {
++    super(NAME, cliService);
++    this.schedulerDAO = schedulerDAO;
++    this.scheduler = LensScheduler.get();
+   }
+ 
+   /**
+@@ -69,20 +87,39 @@ public class SchedulerServiceImpl extends BaseLensService implements SchedulerSe
+    */
+   @Override
+   public SchedulerJobHandle submitJob(LensSessionHandle sessionHandle, XJob job) throws LensException {
+-    return null;
++    // take a job, validate it, submit it to scheduler (check that there are no duplicates, will persist it)
++    // what validations to run on a job apart from the xsd validations??
++    // how to check for duplicates?? Can't same query be scheduled by two different people??
++    // NOTE: currently there are no checks to detect duplicates, so you can submit same query multiple times
++    // What kind of checks are required to avoid duplicates - if name and query string are same and it is submitted by
++    // same user then it is duplicate.
++    LensSessionImpl session = getSession(sessionHandle);
++    UUID id = schedulerDAO.createJob(session.getLoggedInUser(), job);
++    return new SchedulerJobHandle(id);
+   }
+ 
+   /**
+    * {@inheritDoc}
+    */
+   @Override
+-  public void scheduleJob(LensSessionHandle sessionHandle,
+-                                        SchedulerJobHandle jobHandle) throws LensException {
++  public void scheduleJob(LensSessionHandle sessionHandle, SchedulerJobHandle jobHandle) throws LensException {
++    // send the schedule request to the scheduler.
++    UUID externalID = jobHandle.getHandleId();
++    // get the job from the database
++    XJob job = schedulerDAO.getJob(externalID);
++    // what about the status - is it already scheduled?  how to do it in threadsafe manner?
++    // submit it to the scheduler? store its triggers
++    scheduler.schedule(jobHandle, job);
+   }
+ 
+   @Override
+   public SchedulerJobHandle submitAndScheduleJob(LensSessionHandle sessionHandle, XJob job) throws LensException {
+-    return null;
++    // take job, validate it, submit it(check duplicate, persist it), schedule it.
++    LensSessionImpl session = getSession(sessionHandle);
++    UUID id = schedulerDAO.createJob(session.getLoggedInUser(), job);
++    SchedulerJobHandle jobHandle = new SchedulerJobHandle(id);
++    scheduler.schedule(jobHandle, job);
++    return jobHandle;
+   }
+ 
+   /**
+@@ -90,7 +127,10 @@ public class SchedulerServiceImpl extends BaseLensService implements SchedulerSe
+    */
+   @Override
+   public XJob getJobDefinition(LensSessionHandle sessionHandle, SchedulerJobHandle jobHandle) throws LensException {
+-    return null;
++    // get the job definition from the persisted store, return it.
++    UUID externalID = jobHandle.getHandleId();
++    XJob job = schedulerDAO.getJob(externalID);
++    return job;
+   }
+ 
+   /**
+@@ -99,6 +139,8 @@ public class SchedulerServiceImpl extends BaseLensService implements SchedulerSe
+   @Override
+   public SchedulerJobInfo getJobDetails(LensSessionHandle sessionHandle,
+                                         SchedulerJobHandle jobHandle) throws LensException {
++    // get job details from the database. details include - job definition, external id(already provided??)
++
+     return null;
+   }
+ 
+@@ -108,15 +150,34 @@ public class SchedulerServiceImpl extends BaseLensService implements SchedulerSe
+   @Override
+   public boolean updateJob(LensSessionHandle sessionHandle, SchedulerJobHandle jobHandle,
+                            XJob newJobDefinition) throws LensException {
++    // update the state store
++    // what to do with the old definition, archive it?
++    // will jobHandle remain the same?
++    // update can mean expire the old job, create a new job with start time now??
++    // or update can mean just update the job definition and use it from next time onward
++    // what if a user wants to run update from back date??
++    // jobs in terminal state can not be updated ??
++    // update the notification services as well as stuff like end date, frequency etc. might have been updated.
++    UUID externalID = jobHandle.getHandleId();
++    // validate that the jobHandle is a valid one
++    XJob job = schedulerDAO.getJob(externalID);
++    schedulerDAO.updateJob(externalID, newJobDefinition);
+     return false;
+   }
+ 
+   /**
++   *
+    * {@inheritDoc}
+    */
+   @Override
+-  public void expireJob(LensSessionHandle sessionHandle, SchedulerJobHandle jobHandle,
+-                        Date expiryTime) throws LensException {
++  public void expireJob(LensSessionHandle sessionHandle, SchedulerJobHandle jobHandle) throws LensException {
++    // expire job means put the status to expired, unsubscribe from all notification services, no more instances
++    // how to convey the signal to the scheduler, should it be passed to the scheduler itself and let scheduler
++    // manage the state transition and the state store update as well?
++    // can an expire job be run/resumed again? - no
++    // difference between delete and expire is that in expire, history is retained as is in completed.
++    schedulerDAO.expireJob(jobHandle);
++
+ 
+   }
+ 
+@@ -125,6 +186,8 @@ public class SchedulerServiceImpl extends BaseLensService implements SchedulerSe
+    */
+   @Override
+   public boolean suspendJob(LensSessionHandle sessionHandle, SchedulerJobHandle jobHandle) throws LensException {
++    // update the status of the job to be suspended, unsubscribe from all the notifications for that job
++    // store the date of suspend ?? (so that it can be resumed from that time??)
+     return false;
+   }
+ 
+@@ -134,6 +197,9 @@ public class SchedulerServiceImpl extends BaseLensService implements SchedulerSe
+   @Override
+   public boolean resumeJob(LensSessionHandle sessionHandle, SchedulerJobHandle jobHandle,
+                            Date effectiveTime) throws LensException {
++    // resume the job, from the time it was suspended, subscribe to all the notification services
++    // how to ensure that in back date cases as soon as you subscribe to one service there is no incorrect behavior
++    // in the sense that only one service is subscribed so far and that sends the triggers.
+     return false;
+   }
+ 
+@@ -142,6 +208,10 @@ public class SchedulerServiceImpl extends BaseLensService implements SchedulerSe
+    */
+   @Override
+   public boolean deleteJob(LensSessionHandle sessionHandle, SchedulerJobHandle jobHandle) throws LensException {
++    // it should only be a soft delete. Later on we will make a purge service and that service will delete
++    // all the soft delete things.
++    UUID externalID = jobHandle.getHandleId();
++    schedulerDAO.deleteJob(externalID);
+     return false;
+   }
+ 
+@@ -149,9 +219,22 @@ public class SchedulerServiceImpl extends BaseLensService implements SchedulerSe
+    * {@inheritDoc}
+    */
+   @Override
+-  public Collection<SchedulerJobStats> getAllJobStats(LensSessionHandle sessionHandle, String state, String user,
+-                                             String jobName, long startTime, long endTime) throws LensException {
+-    return null;
++  public Collection<SchedulerJobStats> getAllJobStats(LensSessionHandle sessionHandle, String state, String userName,
++                                             long startTime, long endTime) throws LensException {
++    // if username is specified as all (ignore case) then it will show results for all users
++    // if username is specified something other than all it will show stats for all jobs for that user
++    // if username is not specified then the current logged in user will be considered.
++
++    if ("all".equalsIgnoreCase(userName)) {
++      userName = null;
++    } else if (StringUtils.isBlank(userName)) {
++      userName = getSession(sessionHandle).getLoggedInUser();
++    } else {
++      userName = UtilityMethods.removeDomain(userName);
++    }
++
++    // validate that the state is a valid state (enum)
++    return schedulerDAO.getAllJobStats(userName, state, startTime, endTime);
+   }
+ 
+   /**
+@@ -160,7 +243,8 @@ public class SchedulerServiceImpl extends BaseLensService implements SchedulerSe
+   @Override
+   public SchedulerJobStats getJobStats(LensSessionHandle sessionHandle, SchedulerJobHandle handle, String state,
+                               long startTime, long endTime) throws LensException {
+-    return null;
++    // validate that the state is a valid state (enum)
++    return schedulerDAO.getJobStats(handle, state, startTime, endTime);
+   }
+ 
+   /**
+@@ -169,6 +253,7 @@ public class SchedulerServiceImpl extends BaseLensService implements SchedulerSe
+   @Override
+   public boolean rerunInstance(LensSessionHandle sessionHandle,
+                                SchedulerJobInstanceHandle instanceHandle) throws LensException {
++    // todo how will rerunning work with queries containing like now??
+     return false;
+   }
+ 
+@@ -176,15 +261,20 @@ public class SchedulerServiceImpl extends BaseLensService implements SchedulerSe
+    * {@inheritDoc}
+    */
+   @Override
+-  public List<String> getJobInstances(LensSessionHandle sessionHandle,
++  public List<SchedulerJobInstanceInfo> getJobInstances(LensSessionHandle sessionHandle,
+                                       SchedulerJobHandle jobHandle, Long numResults) throws LensException {
+-    return null;
++    // By default return 100 results - make it configurable
++    return schedulerDAO.getJobInstances(jobHandle, numResults);
+   }
+ 
+   @Override
+   public boolean killInstance(LensSessionHandle sessionHandle,
+                               SchedulerJobInstanceHandle instanceHandle) throws LensException {
+-    return false;
++    // it needs to be sent to the scheduler so that it can cancel
++    // todo how to handle the completion notifications for the queries which have been deleted ? 
++    UUID externalID = instanceHandle.getHandleId();
++    schedulerDAO.killInstance(externalID);
++    return true;
+   }
+ 
+ 
+@@ -194,6 +284,7 @@ public class SchedulerServiceImpl extends BaseLensService implements SchedulerSe
+   @Override
+   public SchedulerJobInstanceInfo getInstanceDetails(LensSessionHandle sessionHandle,
+                                                      SchedulerJobInstanceHandle instanceHandle) throws LensException {
++    // TODO what extra details will it give than the getJobInstances?
+     return null;
+   }
+ 
+diff --git a/lens-server/src/main/java/org/apache/lens/server/scheduler/StateMachine.java b/lens-server/src/main/java/org/apache/lens/server/scheduler/StateMachine.java
+new file mode 100644
+index 0000000..54ab6a3
+--- /dev/null
++++ b/lens-server/src/main/java/org/apache/lens/server/scheduler/StateMachine.java
+@@ -0,0 +1,18 @@
++package org.apache.lens.server.scheduler;
++
++/**
++ * This interface should be implemented by all classes which handle state transitions.
++ *
++ * Usually the implementing class is an enum class representing each state and its corresponding
++ * state transitions.
++ */
++public interface StateMachine <STATE extends Enum<STATE>, EVENT extends Enum<EVENT>> {
++
++  /**
++   * This method handles the event and returns the new state the object should transition to.
++   * @param event an event which may affect the state transition.
++   * @return the state that the object should transition to as a result of the event.
++   */
++  STATE onEvent(EVENT event);
++
++}
+diff --git a/lens-server/src/main/java/org/apache/lens/server/scheduler/notification/services/AlarmService.java b/lens-server/src/main/java/org/apache/lens/server/scheduler/notification/services/AlarmService.java
+new file mode 100644
+index 0000000..afbcdd3
+--- /dev/null
++++ b/lens-server/src/main/java/org/apache/lens/server/scheduler/notification/services/AlarmService.java
+@@ -0,0 +1,25 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ * <p/>
++ * http://www.apache.org/licenses/LICENSE-2.0
++ * <p/>
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package org.apache.lens.server.scheduler.notification.services;
++
++/**
++ *
++ */
++public class AlarmService {
++}
+diff --git a/lens-server/src/main/java/org/apache/lens/server/scheduler/notification/services/DataAvailabilityService.java b/lens-server/src/main/java/org/apache/lens/server/scheduler/notification/services/DataAvailabilityService.java
+new file mode 100644
+index 0000000..9bef064
+--- /dev/null
++++ b/lens-server/src/main/java/org/apache/lens/server/scheduler/notification/services/DataAvailabilityService.java
+@@ -0,0 +1,26 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ * <p/>
++ * http://www.apache.org/licenses/LICENSE-2.0
++ * <p/>
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package org.apache.lens.server.scheduler.notification.services;
++
++/**
++ *
++ */
++public class DataAvailabilityService {
++
++}
+diff --git a/lens-server/src/main/java/org/apache/lens/server/scheduler/store/HSQLStateStore.java b/lens-server/src/main/java/org/apache/lens/server/scheduler/store/HSQLStateStore.java
+new file mode 100644
+index 0000000..213aba8
+--- /dev/null
++++ b/lens-server/src/main/java/org/apache/lens/server/scheduler/store/HSQLStateStore.java
+@@ -0,0 +1,46 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ * <p/>
++ * http://www.apache.org/licenses/LICENSE-2.0
++ * <p/>
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package org.apache.lens.server.scheduler.store;
++
++import org.apache.lens.api.scheduler.XJob;
++
++/**
++ * HSQL implementation of the state store. This is primarily intended for development and testing purposes.
++ */
++public class HSQLStateStore implements StateStore {
++
++  @Override
++  public void initStore() {
++    createJobTableIfNotExists();
++    createJobInstanceTableIfNotExists();
++  }
++
++  private void createJobInstanceTableIfNotExists() {
++
++  }
++
++  private void createJobTableIfNotExists() {
++  }
++
++
++  @Override
++  public int saveJob(XJob job) {
++    return 0;
++  }
++}
+diff --git a/lens-server/src/main/java/org/apache/lens/server/scheduler/store/SchedulerDAO.java b/lens-server/src/main/java/org/apache/lens/server/scheduler/store/SchedulerDAO.java
+new file mode 100644
+index 0000000..cbce082
+--- /dev/null
++++ b/lens-server/src/main/java/org/apache/lens/server/scheduler/store/SchedulerDAO.java
+@@ -0,0 +1,172 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ * <p/>
++ * http://www.apache.org/licenses/LICENSE-2.0
++ * <p/>
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package org.apache.lens.server.scheduler.store;
++import lombok.extern.slf4j.Slf4j;
++
++
++import lombok.extern.slf4j.Slf4j;
++import org.apache.commons.dbutils.DbUtils;
++import org.apache.commons.dbutils.QueryRunner;
++import org.apache.commons.dbutils.ResultSetHandler;
++import org.apache.commons.dbutils.handlers.BeanHandler;
++import org.apache.commons.lang3.StringUtils;
++import org.apache.hadoop.conf.Configuration;
++import org.apache.lens.api.query.QueryHandle;
++import org.apache.lens.api.query.SchedulerJobHandle;
++import org.apache.lens.api.query.SchedulerJobInstanceInfo;
++import org.apache.lens.api.scheduler.XJob;
++import org.apache.lens.server.api.error.LensException;
++import org.apache.lens.server.api.query.FinishedLensQuery;
++import org.apache.lens.server.api.scheduler.SchedulerJobStats;
++import org.apache.lens.server.util.UtilityMethods;
++
++import javax.sql.DataSource;
++import java.sql.Connection;
++import java.sql.ResultSet;
++import java.sql.SQLException;
++import java.util.ArrayList;
++import java.util.List;
++import java.util.UUID;
++
++/**
++ * Top level class which logs and retrieves jobs and instances from Database.
++ */
++@Slf4j
++public class SchedulerDAO {
++
++  /** The datasource. */
++  private DataSource ds;
++
++  /**
++   * Initialize  the DAO by reading configuration.
++   * @param conf the conf
++   */
++  public void init(Configuration conf) {
++    ds = UtilityMethods.getDataSourceFromConf(conf);
++  }
++
++  public Connection getConnection() throws SQLException {
++    return ds.getConnection();
++  }
++
++  /**
++   * Drop scheduler jobs table.
++   */
++  public void dropSchedulerJobsTable() {
++    QueryRunner runner = new QueryRunner(ds);
++    try {
++      runner.update("drop table scheduler_jobs");
++    } catch (SQLException e) {
++      log.error("SQL exception while dropping scheduler_jobs table.", e);
++    }
++  }
++
++  /**
++   * Drop scheduler_job_instances table.
++   */
++  public void dropSchedulerJobInstancesTable() {
++    QueryRunner runner = new QueryRunner(ds);
++    try {
++      runner.update("drop table scheduler_job_instances");
++    } catch (SQLException e) {
++      log.error("SQL exception while dropping scheduler_job_instances table.", e);
++    }
++  }
++
++
++  /**
++   * Method to create "scheduler_jobs" table, this is required for embedded lens server.
++   * For production server we will not be creating tables as it would be created upfront.
++   *
++   * @throws Exception SQLException encountered if creation of the table fails.
++   */
++  public void createSchedulerJobsTable() throws Exception {
++    String sql = "CREATE TABLE if not exists scheduler_jobs (id bigint identity, handle varchar(255) not null unique, "
++        + "job blob(30000) not null, user varchar(255) not null, createdon bigint)";
++    try {
++      QueryRunner runner = new QueryRunner(ds);
++      runner.update(sql);
++      log.info("Created scheduler_jobs table.");
++    } catch (SQLException e) {
++      log.warn("Unable to create scheduler_jobs table", e);
++    }
++  }
++
++  /**
++   * Method to create "scheduler_job_instances" table, this is required for embedded lens server.
++   * For production server we will not be creating tables as it would be created upfront.
++   *
++   * @throws Exception SQLException encountered if creation of the table fails.
++   */
++  public void createSchedulerJobInstancesTable() throws Exception {
++    String sql = "CREATE TABLE if not exists scheduler_job_instances (id bigint identity, handle varchar(255) not " +
++        "null unique, submissiontime bigint)";
++    try {
++      QueryRunner runner = new QueryRunner(ds);
++      runner.update(sql);
++      log.info("Created scheduler_job_instances table.");
++    } catch (SQLException e) {
++      log.warn("Unable to create scheduler_job_instances table", e);
++    }
++  }
++
++  /**
++   * DAO method to insert a new job into scheduler_jobs table.
++   *
++   * @param job to be inserted
++   * @throws SQLException the exception
++   */
++  public UUID createJob(String user, XJob job) {
++    // insert a row and return the id
++    UUID handleID = UUID.randomUUID();
++    return handleID;
++  }
++
++
++  public XJob getJob(UUID externalID) {
++
++    return null;
++  }
++
++  public List<SchedulerJobStats> getAllJobStats(String userName, String state, long startTime, long endTime) {
++    return null;
++  }
++
++  public SchedulerJobStats getJobStats(SchedulerJobHandle handle, String state, long startTime, long endTime) {
++    return null;
++  }
++
++  public List<SchedulerJobInstanceInfo> getJobInstances(SchedulerJobHandle jobHandle, Long numResults) {
++    return null;
++  }
++
++  public void updateJob(UUID externalID, XJob newJobDefinition) {
++
++  }
++
++  public void killInstance(UUID externalID) {
++    // a killed instance will reach terminal state and it will not be run again.
++    // mark the instance status as killed.
++
++  }
++
++  public void deleteJob(UUID externalID) {
++    // todo mark the status as deleted? or add a new column to indicate that is_deleted is true.??
++  }
++}
+diff --git a/lens-server/src/main/java/org/apache/lens/server/scheduler/store/StateStore.java b/lens-server/src/main/java/org/apache/lens/server/scheduler/store/StateStore.java
+new file mode 100644
+index 0000000..ade97a7
+--- /dev/null
++++ b/lens-server/src/main/java/org/apache/lens/server/scheduler/store/StateStore.java
+@@ -0,0 +1,41 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ * <p/>
++ * http://www.apache.org/licenses/LICENSE-2.0
++ * <p/>
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package org.apache.lens.server.scheduler.store;
++
++import org.apache.lens.api.scheduler.XJob;
++
++/**
++ * Interface for all persistence and retrieval related operations for scheduler.
++ */
++public interface StateStore {
++
++  /**
++   * Initialize the stateStore. If the job and instance tables are not created then it creates the tables.
++   */
++  void initStore();
++
++  // store a job
++  int saveJob(XJob job);
++
++  // delete a job
++
++  // store an instance
++
++  // all job related operations and all instance related operations, through a dao?
++}
+-- 
+1.9.1
+
