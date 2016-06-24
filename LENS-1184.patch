@@ -1,0 +1,756 @@
+From ed282e9acf4e28c361a1fe643870dc736d7eea7c Mon Sep 17 00:00:00 2001
+From: Ajay Yadav <ajay.yadav@inmobi.com>
+Date: Fri, 17 Jun 2016 12:34:51 +0530
+Subject: [PATCH] LENS-1184 Rest API for the scheduler.
+
+---
+ .../server/api/scheduler/SchedulerService.java     |  25 ++-
+ .../lens/server/scheduler/LensScheduler.java       |  48 ++++++
+ .../lens/server/scheduler/ScheduleResource.java    | 187 ++++++++++++++++++++-
+ .../server/scheduler/SchedulerServiceImpl.java     |  96 ++++++++---
+ .../lens/server/scheduler/store/SchedulerDAO.java  | 148 ++++++++++++++++
+ 5 files changed, 464 insertions(+), 40 deletions(-)
+ create mode 100644 lens-server/src/main/java/org/apache/lens/server/scheduler/LensScheduler.java
+ create mode 100644 lens-server/src/main/java/org/apache/lens/server/scheduler/store/SchedulerDAO.java
+
+diff --git a/lens-server-api/src/main/java/org/apache/lens/server/api/scheduler/SchedulerService.java b/lens-server-api/src/main/java/org/apache/lens/server/api/scheduler/SchedulerService.java
+index b6ec093..70b30e3 100644
+--- a/lens-server-api/src/main/java/org/apache/lens/server/api/scheduler/SchedulerService.java
++++ b/lens-server-api/src/main/java/org/apache/lens/server/api/scheduler/SchedulerService.java
+@@ -19,7 +19,6 @@
+ package org.apache.lens.server.api.scheduler;
+ 
+ import java.util.Collection;
+-import java.util.Date;
+ import java.util.List;
+ 
+ import org.apache.lens.api.LensSessionHandle;
+@@ -28,13 +27,18 @@ import org.apache.lens.api.query.SchedulerJobInfo;
+ import org.apache.lens.api.query.SchedulerJobInstanceHandle;
+ import org.apache.lens.api.query.SchedulerJobInstanceInfo;
+ import org.apache.lens.api.scheduler.XJob;
++import org.apache.lens.server.api.LensService;
++import org.apache.lens.server.api.SessionValidator;
+ import org.apache.lens.server.api.error.LensException;
+ 
+ 
+ /**
+  * Scheduler interface.
+  */
+-public interface SchedulerService {
++public interface SchedulerService extends LensService, SessionValidator {
++
++  /** The constant NAME */
++  String NAME = "scheduler";
+ 
+   /**
+    * Submit a job.
+@@ -108,11 +112,9 @@ public interface SchedulerService {
+    *
+    * @param sessionHandle handle for the current session.
+    * @param jobHandle     handle for the job
+-   * @param expiryTime    time after which the job shouldn't execute.
+    * @throws LensException the lens exception
+    */
+-  void expireJob(LensSessionHandle sessionHandle, SchedulerJobHandle jobHandle,
+-                 Date expiryTime) throws LensException;
++  void expireJob(LensSessionHandle sessionHandle, SchedulerJobHandle jobHandle) throws LensException;
+ 
+ 
+   /**
+@@ -135,12 +137,10 @@ public interface SchedulerService {
+    *
+    * @param sessionHandle handle for the session.
+    * @param jobHandle     handle for the job
+-   * @param effectiveTime time from which to resume the instances.
+    * @return true if the job was resumed successfully, false otherwise.
+    * @throws LensException the lens exception
+    */
+-  boolean resumeJob(LensSessionHandle sessionHandle, SchedulerJobHandle jobHandle,
+-                    Date effectiveTime) throws LensException;
++  boolean resumeJob(LensSessionHandle sessionHandle, SchedulerJobHandle jobHandle) throws LensException;
+ 
+   /**
+    * Delete a job.
+@@ -159,16 +159,13 @@ public interface SchedulerService {
+    *                      if null no entries will be removed from result
+    * @param user          filter for user who submitted the job, if specified only jobs submitted by the given user
+    *                      will be returned, if not specified no entries will be removed from result on basis of userName
+-   * @param jobName       filter for jobName, if specified only the jobs with name same as given name will be considered
+-   *                      , else no jobs will be filtered out on the basis of name.
+    * @param startTime     if specified only instances with scheduleTime after this time will be considered.
+    * @param endTime       if specified only instances with scheduleTime before this time will be considered.
+    * @return A collection of stats per job
+    * @throws LensException
+    */
+   Collection<SchedulerJobStats> getAllJobStats(LensSessionHandle sessionHandle,
+-                                      String state, String user,
+-                                      String jobName, long startTime, long endTime) throws LensException;
++                                      String state, String user, long startTime, long endTime) throws LensException;
+ 
+   /**
+    * Returns stats for a job.
+@@ -191,10 +188,10 @@ public interface SchedulerService {
+    * @param sessionHandle handle for the session.
+    * @param jobHandle     handle for the job
+    * @param numResults    - number of results to be returned, default 100.
+-   * @return list of instance ids for the job
++   * @return list of instances for the job
+    * @throws LensException the lens exception
+    */
+-  List<String> getJobInstances(LensSessionHandle sessionHandle,
++  List<SchedulerJobInstanceInfo> getJobInstances(LensSessionHandle sessionHandle,
+                                SchedulerJobHandle jobHandle, Long numResults) throws LensException;
+ 
+   /**
+diff --git a/lens-server/src/main/java/org/apache/lens/server/scheduler/LensScheduler.java b/lens-server/src/main/java/org/apache/lens/server/scheduler/LensScheduler.java
+new file mode 100644
+index 0000000..0a49479
+--- /dev/null
++++ b/lens-server/src/main/java/org/apache/lens/server/scheduler/LensScheduler.java
+@@ -0,0 +1,48 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ * <p/>
++ * http://www.apache.org/licenses/LICENSE-2.0
++ * <p/>
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package org.apache.lens.server.scheduler;
++
++import org.apache.lens.api.query.SchedulerJobHandle;
++import org.apache.lens.api.scheduler.XJob;
++
++/**
++ * Core work engine for the Lens Scheduler.
++ */
++public final class LensScheduler {
++
++  private static final LensScheduler INSTANCE = new LensScheduler();
++
++  // private constructor to ensure single instance.
++  private LensScheduler(){}
++
++  /**
++   *
++   * @return the singleton instance of the scheduler.
++   */
++  public static LensScheduler get(){
++    return INSTANCE;
++  }
++
++  public void schedule(SchedulerJobHandle handle, XJob job) {
++
++  }
++
++
++
++}
+diff --git a/lens-server/src/main/java/org/apache/lens/server/scheduler/ScheduleResource.java b/lens-server/src/main/java/org/apache/lens/server/scheduler/ScheduleResource.java
+index abc4621..78cc3ba 100644
+--- a/lens-server/src/main/java/org/apache/lens/server/scheduler/ScheduleResource.java
++++ b/lens-server/src/main/java/org/apache/lens/server/scheduler/ScheduleResource.java
+@@ -18,20 +18,195 @@
+  */
+ package org.apache.lens.server.scheduler;
+ 
+-import javax.ws.rs.GET;
+-import javax.ws.rs.Path;
+-import javax.ws.rs.Produces;
++import java.util.Collection;
++import java.util.List;
++
++import javax.ws.rs.*;
+ import javax.ws.rs.core.MediaType;
+ 
++import org.apache.lens.api.APIResult;
++import org.apache.lens.api.LensSessionHandle;
++import org.apache.lens.api.query.SchedulerJobHandle;
++import org.apache.lens.api.query.SchedulerJobInfo;
++import org.apache.lens.api.query.SchedulerJobInstanceHandle;
++import org.apache.lens.api.query.SchedulerJobInstanceInfo;
++import org.apache.lens.api.scheduler.XJob;
++import org.apache.lens.server.LensServices;
++import org.apache.lens.server.api.error.LensException;
++import org.apache.lens.server.api.scheduler.SchedulerJobStats;
++import org.apache.lens.server.api.scheduler.SchedulerService;
++
++import org.apache.commons.lang3.StringUtils;
++
++import org.joda.time.DateTime;
++
+ /**
+- * The Class ScheduleResource.
++ * REST end point for all scheduler operations.
+  */
+-@Path("/queryscheduler")
++@Path("scheduler")
++@Produces({MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML})
+ public class ScheduleResource {
+ 
++  public static enum INSTANCE_ACTIONS {
++    KILL, RERUN;
++
++    public static INSTANCE_ACTIONS fromString(String name) {
++      return valueOf(name.toUpperCase());
++    }
++  }
++
++  public static enum JOB_ACTIONS {
++    SCHEDULE, EXPIRE, SUSPEND, RESUME;
++
++    public static JOB_ACTIONS fromString(String name) {
++      return valueOf(name.toUpperCase());
++    }
++  }
++
++  public static SchedulerService getSchedulerService() {
++    return LensServices.get().getService(SchedulerService.NAME);
++  }
++
++  private static void validateSession(LensSessionHandle sessionHandle) throws LensException {
++    getSchedulerService().validateSession(sessionHandle);
++  }
++
+   @GET
+   @Produces(MediaType.TEXT_PLAIN)
+   public String getMessage() {
+-    return "Hello World! from scheduler";
++    return "Scheduler is running.";
++  }
++
++  @POST
++  @Consumes({MediaType.APPLICATION_XML, MediaType.APPLICATION_JSON})
++  @Path("jobs")
++  public SchedulerJobHandle submitJob(@QueryParam("sessionid") LensSessionHandle sessionId,
++                                      @QueryParam("action") String action, XJob job) throws LensException {
++    validateSession(sessionId);
++    if (StringUtils.isBlank(action)) {
++      return getSchedulerService().submitJob(sessionId, job);
++    } else if (StringUtils.equalsIgnoreCase(action, "submit-and-schedule")) {
++      return getSchedulerService().submitAndScheduleJob(sessionId, job);
++    } else {
++      throw new BadRequestException("Optional Query param 'action' can only be 'submit-and-schedule'");
++    }
++  }
++
++  @GET
++  @Path("jobs/stats")
++  public Collection<SchedulerJobStats> getAllJobStats(@QueryParam("sessionid") LensSessionHandle sessionId,
++                                                      @QueryParam("state") String state,
++                                                      @QueryParam("name") String jobName,
++                                                      @QueryParam("user") String user,
++                                                      @QueryParam("start") DateTime start,
++                                                      @QueryParam("end") DateTime end) throws LensException {
++    return getSchedulerService().getAllJobStats(sessionId, state, user, start.getMillis(), end.getMillis());
++  }
++
++  @GET
++  @Path("jobs/{jobHandle}")
++  public XJob getJobDefinition(@QueryParam("sessionid") LensSessionHandle sessionId,
++                               @PathParam("jobHandle") SchedulerJobHandle jobHandle) throws LensException {
++
++    return getSchedulerService().getJobDefinition(sessionId, jobHandle);
++  }
++
++  @DELETE
++  @Path("jobs/{jobHandle}")
++  public APIResult deleteJob(@QueryParam("sessionid") LensSessionHandle sessionId,
++                             @QueryParam("jobHandle") SchedulerJobHandle jobHandle) throws LensException {
++    validateSession(sessionId);
++    getSchedulerService().deleteJob(sessionId, jobHandle);
++    return APIResult.success();
+   }
++
++  @PUT
++  @Path("jobs/{jobHandle}/")
++  @Consumes({MediaType.APPLICATION_XML, MediaType.APPLICATION_JSON})
++  public APIResult updateJob(@QueryParam("sessionid") LensSessionHandle sessionId,
++                             @PathParam("jobHandle") SchedulerJobHandle jobHandle, XJob job) throws LensException {
++    validateSession(sessionId);
++    getSchedulerService().updateJob(sessionId, jobHandle, job);
++    return APIResult.success();
++  }
++
++  @POST
++  @Path("jobs/{jobHandle}")
++  public APIResult updateJob(@QueryParam("sessionid") LensSessionHandle sessionId,
++                               @PathParam("jobHandle") SchedulerJobHandle jobHandle,
++                               @QueryParam("action") JOB_ACTIONS action) throws LensException {
++    validateSession(sessionId);
++    switch (action) {
++
++    case SCHEDULE:
++      getSchedulerService().scheduleJob(sessionId, jobHandle);
++      break;
++
++    case EXPIRE:
++      getSchedulerService().expireJob(sessionId, jobHandle);
++      break;
++
++    case SUSPEND:
++      getSchedulerService().suspendJob(sessionId, jobHandle);
++      break;
++
++    case RESUME:
++      getSchedulerService().resumeJob(sessionId, jobHandle);
++      break;
++
++    default:
++      throw new BadRequestException("Unsupported action " + action.toString());
++    }
++    return APIResult.success();
++  }
++
++  @GET
++  @Path("jobs/{jobHandle}/stats")
++  public SchedulerJobInfo getJobDetails(@QueryParam("sessionid") LensSessionHandle sessionId,
++                                        @PathParam("jobHandle") SchedulerJobHandle jobHandle) throws LensException {
++    validateSession(sessionId);
++    return getSchedulerService().getJobDetails(sessionId, jobHandle);
++  }
++
++  @GET
++  @Path("jobs/{jobHandle}/instances/")
++  public List<SchedulerJobInstanceInfo> getJobInstances(@QueryParam("sessionid") LensSessionHandle sessionId,
++                                                      @PathParam("jobHandle") SchedulerJobHandle jobHandle,
++                                                      @QueryParam("numResults") Long numResults) throws LensException {
++    validateSession(sessionId);
++    return getSchedulerService().getJobInstances(sessionId, jobHandle, numResults);
++  }
++
++  @GET
++  @Path("instance/{instanceHandle}")
++  public SchedulerJobInstanceInfo getInstanceDetails(@QueryParam("sessionid") LensSessionHandle sessionId,
++                                                     @PathParam("instanceHandle")
++                                                     SchedulerJobInstanceHandle instanceHandle) throws LensException {
++    validateSession(sessionId);
++    return getSchedulerService().getInstanceDetails(sessionId, instanceHandle);
++  }
++
++  @POST
++  @Path("instance/{instanceHandle}")
++  public APIResult updateInstance(@QueryParam("sessionid") LensSessionHandle sessionId,
++                                @PathParam("instanceHandle") SchedulerJobInstanceHandle instanceHandle,
++                                @QueryParam("action") INSTANCE_ACTIONS action) throws LensException {
++    validateSession(sessionId);
++
++    switch (action) {
++    case KILL:
++      getSchedulerService().killInstance(sessionId, instanceHandle);
++      break;
++
++    case RERUN:
++      getSchedulerService().rerunInstance(sessionId, instanceHandle);
++      break;
++
++    default:
++      throw new BadRequestException("Unsupported action " + action.toString());
++
++    }
++    return APIResult.success();
++  }
++
+ }
+diff --git a/lens-server/src/main/java/org/apache/lens/server/scheduler/SchedulerServiceImpl.java b/lens-server/src/main/java/org/apache/lens/server/scheduler/SchedulerServiceImpl.java
+index ce98601..641a427 100644
+--- a/lens-server/src/main/java/org/apache/lens/server/scheduler/SchedulerServiceImpl.java
++++ b/lens-server/src/main/java/org/apache/lens/server/scheduler/SchedulerServiceImpl.java
+@@ -19,8 +19,8 @@
+ package org.apache.lens.server.scheduler;
+ 
+ import java.util.Collection;
+-import java.util.Date;
+ import java.util.List;
++import java.util.UUID;
+ 
+ import org.apache.lens.api.LensSessionHandle;
+ import org.apache.lens.api.query.SchedulerJobHandle;
+@@ -33,13 +33,20 @@ import org.apache.lens.server.api.error.LensException;
+ import org.apache.lens.server.api.health.HealthStatus;
+ import org.apache.lens.server.api.scheduler.SchedulerJobStats;
+ import org.apache.lens.server.api.scheduler.SchedulerService;
++import org.apache.lens.server.scheduler.store.SchedulerDAO;
++import org.apache.lens.server.session.LensSessionImpl;
+ 
+ import org.apache.hive.service.cli.CLIService;
++
+ /**
+- * The Class QuerySchedulerService.
++ * This class handles all the scheduler operations.
+  */
+ public class SchedulerServiceImpl extends BaseLensService implements SchedulerService {
+ 
++  // get the state store
++  private SchedulerDAO schedulerDAO;
++
++  private LensScheduler scheduler;
+   /**
+    * The constant name for scheduler service.
+    */
+@@ -52,6 +59,14 @@ public class SchedulerServiceImpl extends BaseLensService implements SchedulerSe
+    */
+   public SchedulerServiceImpl(CLIService cliService) {
+     super(NAME, cliService);
++    this.schedulerDAO = new SchedulerDAO();
++    this.scheduler = LensScheduler.get();
++  }
++
++  public SchedulerServiceImpl(CLIService cliService, SchedulerDAO schedulerDAO) {
++    super(NAME, cliService);
++    this.schedulerDAO = schedulerDAO;
++    this.scheduler = LensScheduler.get();
+   }
+ 
+   /**
+@@ -69,20 +84,34 @@ public class SchedulerServiceImpl extends BaseLensService implements SchedulerSe
+    */
+   @Override
+   public SchedulerJobHandle submitJob(LensSessionHandle sessionHandle, XJob job) throws LensException {
+-    return null;
++    //TBD place holder code
++    LensSessionImpl session = getSession(sessionHandle);
++    UUID id = schedulerDAO.createJob(session.getLoggedInUser(), job);
++    return new SchedulerJobHandle(id);
+   }
+ 
+   /**
+    * {@inheritDoc}
+    */
+   @Override
+-  public void scheduleJob(LensSessionHandle sessionHandle,
+-                                        SchedulerJobHandle jobHandle) throws LensException {
++  public void scheduleJob(LensSessionHandle sessionHandle, SchedulerJobHandle jobHandle) throws LensException {
++    //TBD place holder code
++    // send the schedule request to the scheduler.
++    UUID externalID = jobHandle.getHandleId();
++    // get the job from the database
++    XJob job = schedulerDAO.getJob(externalID);
++    scheduler.schedule(jobHandle, job);
+   }
+ 
+   @Override
+   public SchedulerJobHandle submitAndScheduleJob(LensSessionHandle sessionHandle, XJob job) throws LensException {
+-    return null;
++    //TBD place holder code
++    // take job, validate it, submit it(check duplicate, persist it), schedule it.
++    LensSessionImpl session = getSession(sessionHandle);
++    UUID id = schedulerDAO.createJob(session.getLoggedInUser(), job);
++    SchedulerJobHandle jobHandle = new SchedulerJobHandle(id);
++    scheduler.schedule(jobHandle, job);
++    return jobHandle;
+   }
+ 
+   /**
+@@ -90,7 +119,11 @@ public class SchedulerServiceImpl extends BaseLensService implements SchedulerSe
+    */
+   @Override
+   public XJob getJobDefinition(LensSessionHandle sessionHandle, SchedulerJobHandle jobHandle) throws LensException {
+-    return null;
++    //TBD place holder code
++    // get the job definition from the persisted store, return it.
++    UUID externalID = jobHandle.getHandleId();
++    XJob job = schedulerDAO.getJob(externalID);
++    return job;
+   }
+ 
+   /**
+@@ -99,6 +132,7 @@ public class SchedulerServiceImpl extends BaseLensService implements SchedulerSe
+   @Override
+   public SchedulerJobInfo getJobDetails(LensSessionHandle sessionHandle,
+                                         SchedulerJobHandle jobHandle) throws LensException {
++    //TBD place holder code
+     return null;
+   }
+ 
+@@ -108,16 +142,21 @@ public class SchedulerServiceImpl extends BaseLensService implements SchedulerSe
+   @Override
+   public boolean updateJob(LensSessionHandle sessionHandle, SchedulerJobHandle jobHandle,
+                            XJob newJobDefinition) throws LensException {
++    //TBD place holder code
++    UUID externalID = jobHandle.getHandleId();
++    // validate that the jobHandle is a valid one
++    XJob job = schedulerDAO.getJob(externalID);
++    schedulerDAO.updateJob(externalID, newJobDefinition);
+     return false;
+   }
+ 
+   /**
++   *
+    * {@inheritDoc}
+    */
+   @Override
+-  public void expireJob(LensSessionHandle sessionHandle, SchedulerJobHandle jobHandle,
+-                        Date expiryTime) throws LensException {
+-
++  public void expireJob(LensSessionHandle sessionHandle, SchedulerJobHandle jobHandle) throws LensException {
++    //TBD place holder code
+   }
+ 
+   /**
+@@ -125,6 +164,7 @@ public class SchedulerServiceImpl extends BaseLensService implements SchedulerSe
+    */
+   @Override
+   public boolean suspendJob(LensSessionHandle sessionHandle, SchedulerJobHandle jobHandle) throws LensException {
++    //TBD place holder code
+     return false;
+   }
+ 
+@@ -132,8 +172,8 @@ public class SchedulerServiceImpl extends BaseLensService implements SchedulerSe
+    * {@inheritDoc}
+    */
+   @Override
+-  public boolean resumeJob(LensSessionHandle sessionHandle, SchedulerJobHandle jobHandle,
+-                           Date effectiveTime) throws LensException {
++  public boolean resumeJob(LensSessionHandle sessionHandle, SchedulerJobHandle jobHandle) throws LensException {
++    // TBD place holder code
+     return false;
+   }
+ 
+@@ -142,6 +182,11 @@ public class SchedulerServiceImpl extends BaseLensService implements SchedulerSe
+    */
+   @Override
+   public boolean deleteJob(LensSessionHandle sessionHandle, SchedulerJobHandle jobHandle) throws LensException {
++    // TBD place holder code
++    // it should only be a soft delete. Later on we will make a purge service and that service will delete
++    // all the soft delete things.
++    UUID externalID = jobHandle.getHandleId();
++    schedulerDAO.deleteJob(externalID);
+     return false;
+   }
+ 
+@@ -149,9 +194,11 @@ public class SchedulerServiceImpl extends BaseLensService implements SchedulerSe
+    * {@inheritDoc}
+    */
+   @Override
+-  public Collection<SchedulerJobStats> getAllJobStats(LensSessionHandle sessionHandle, String state, String user,
+-                                             String jobName, long startTime, long endTime) throws LensException {
+-    return null;
++  public Collection<SchedulerJobStats> getAllJobStats(LensSessionHandle sessionHandle, String state, String userName,
++                                             long startTime, long endTime) throws LensException {
++    // TBD place holder code
++    // validate that the state is a valid state (enum)
++    return schedulerDAO.getAllJobStats(userName, state, startTime, endTime);
+   }
+ 
+   /**
+@@ -160,7 +207,9 @@ public class SchedulerServiceImpl extends BaseLensService implements SchedulerSe
+   @Override
+   public SchedulerJobStats getJobStats(LensSessionHandle sessionHandle, SchedulerJobHandle handle, String state,
+                               long startTime, long endTime) throws LensException {
+-    return null;
++    // TBD place holder code
++    // validate that the state is a valid state (enum)
++    return schedulerDAO.getJobStats(handle, state, startTime, endTime);
+   }
+ 
+   /**
+@@ -169,22 +218,28 @@ public class SchedulerServiceImpl extends BaseLensService implements SchedulerSe
+   @Override
+   public boolean rerunInstance(LensSessionHandle sessionHandle,
+                                SchedulerJobInstanceHandle instanceHandle) throws LensException {
+-    return false;
++    // TBD place holder code
++    return schedulerDAO.rerunInstance(instanceHandle);
+   }
+ 
+   /**
+    * {@inheritDoc}
+    */
+   @Override
+-  public List<String> getJobInstances(LensSessionHandle sessionHandle,
++  public List<SchedulerJobInstanceInfo> getJobInstances(LensSessionHandle sessionHandle,
+                                       SchedulerJobHandle jobHandle, Long numResults) throws LensException {
+-    return null;
++    // TBD place holder code
++    // By default return 100 results - make it configurable
++    return schedulerDAO.getJobInstances(jobHandle, numResults);
+   }
+ 
+   @Override
+   public boolean killInstance(LensSessionHandle sessionHandle,
+                               SchedulerJobInstanceHandle instanceHandle) throws LensException {
+-    return false;
++    // TBD place holder code
++    UUID externalID = instanceHandle.getHandleId();
++    schedulerDAO.killInstance(externalID);
++    return true;
+   }
+ 
+ 
+@@ -194,6 +249,7 @@ public class SchedulerServiceImpl extends BaseLensService implements SchedulerSe
+   @Override
+   public SchedulerJobInstanceInfo getInstanceDetails(LensSessionHandle sessionHandle,
+                                                      SchedulerJobInstanceHandle instanceHandle) throws LensException {
++    // TBD place holder code
+     return null;
+   }
+ 
+diff --git a/lens-server/src/main/java/org/apache/lens/server/scheduler/store/SchedulerDAO.java b/lens-server/src/main/java/org/apache/lens/server/scheduler/store/SchedulerDAO.java
+new file mode 100644
+index 0000000..20add71
+--- /dev/null
++++ b/lens-server/src/main/java/org/apache/lens/server/scheduler/store/SchedulerDAO.java
+@@ -0,0 +1,148 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ * <p/>
++ * http://www.apache.org/licenses/LICENSE-2.0
++ * <p/>
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package org.apache.lens.server.scheduler.store;
++
++import java.sql.Connection;
++import java.sql.SQLException;
++import java.util.List;
++import java.util.UUID;
++
++import javax.sql.DataSource;
++
++import org.apache.lens.api.query.SchedulerJobHandle;
++import org.apache.lens.api.query.SchedulerJobInstanceHandle;
++import org.apache.lens.api.query.SchedulerJobInstanceInfo;
++import org.apache.lens.api.scheduler.XJob;
++import org.apache.lens.server.api.scheduler.SchedulerJobStats;
++import org.apache.lens.server.util.UtilityMethods;
++
++import org.apache.hadoop.conf.Configuration;
++
++import lombok.extern.slf4j.Slf4j;
++
++/**
++ * Top level class which logs and retrieves jobs and instances from Database.
++ */
++@Slf4j
++public class SchedulerDAO {
++
++  /** The datasource. */
++  private DataSource ds;
++
++  /**
++   * Initialize  the DAO by reading configuration.
++   * @param conf the conf
++   */
++  public void init(Configuration conf) {
++    ds = UtilityMethods.getDataSourceFromConf(conf);
++  }
++
++  public Connection getConnection() throws SQLException {
++    return ds.getConnection();
++  }
++
++  /**
++   * Drop scheduler jobs table.
++   */
++  public void dropSchedulerJobsTable() {
++    //TBD
++  }
++
++  /**
++   * Drop scheduler_job_instances table.
++   */
++  public void dropSchedulerJobInstancesTable() {
++    //TBD
++  }
++
++
++  /**
++   * Method to create "scheduler_jobs" table, this is required for embedded lens server.
++   * For production server we will not be creating tables as it would be created upfront.
++   *
++   * @throws Exception SQLException encountered if creation of the table fails.
++   */
++  public void createSchedulerJobsTable() throws Exception {
++    //TBD
++  }
++
++  /**
++   * Method to create "scheduler_job_instances" table, this is required for embedded lens server.
++   * For production server we will not be creating tables as it would be created upfront.
++   *
++   * @throws Exception SQLException encountered if creation of the table fails.
++   */
++  public void createSchedulerJobInstancesTable() throws Exception {
++    //TBD
++  }
++
++  /**
++   * DAO method to insert a new job into scheduler_jobs table.
++   *
++   * @param job to be inserted
++   * @throws SQLException the exception
++   */
++  public UUID createJob(String user, XJob job) {
++    // insert a row and return the id
++    UUID handleID = UUID.randomUUID();
++    return handleID;
++  }
++
++
++  public XJob getJob(UUID externalID) {
++    //TBD
++    return null;
++  }
++
++  public List<SchedulerJobStats> getAllJobStats(String userName, String state, long startTime, long endTime) {
++    //TBD
++    return null;
++  }
++
++  public SchedulerJobStats getJobStats(SchedulerJobHandle handle, String state, long startTime, long endTime) {
++    //TBD
++    return null;
++  }
++
++  public List<SchedulerJobInstanceInfo> getJobInstances(SchedulerJobHandle jobHandle, Long numResults) {
++    //TBD
++    return null;
++  }
++
++  public void updateJob(UUID externalID, XJob newJobDefinition) {
++    //TBD
++  }
++
++  public void killInstance(UUID externalID) {
++    //TBD
++  }
++
++  public void deleteJob(UUID externalID) {
++    //TBD
++  }
++
++  public void expireJob(SchedulerJobHandle jobHandle) {
++    //TBD
++  }
++
++  public boolean rerunInstance(SchedulerJobInstanceHandle instanceHandle) {
++    //TBD
++    return false;
++  }
++}
+-- 
+1.8.3.4 (Apple Git-47)
+
