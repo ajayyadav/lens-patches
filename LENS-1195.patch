@@ -1,0 +1,403 @@
+commit 9f26a728012eea67e9a1690537a018267d5abc34
+Author: Ajay Yadava <ajayyadava@apache.org>
+Date:   Mon Jun 27 15:39:12 2016 +0530
+
+    first cut for state machine.
+
+diff --git a/lens-server/src/main/java/org/apache/lens/server/scheduler/exception/InvalidStateTransitionException.java b/lens-server/src/main/java/org/apache/lens/server/scheduler/exception/InvalidStateTransitionException.java
+new file mode 100644
+index 0000000..bfa39fc
+--- /dev/null
++++ b/lens-server/src/main/java/org/apache/lens/server/scheduler/exception/InvalidStateTransitionException.java
+@@ -0,0 +1,49 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package org.apache.lens.server.scheduler.exception;
++
++import org.apache.lens.server.api.error.LensException;
++
++/**
++ * Exception thrown during state transition of jobs and job instances.
++ */
++public class InvalidStateTransitionException extends LensException {
++  /**
++   * @param e Exception
++   */
++  public InvalidStateTransitionException(Throwable e) {
++    super(e);
++  }
++
++  /**
++   * @param message - custom exception message
++   * @param e
++   */
++  public InvalidStateTransitionException(String message, Throwable e) {
++    super(message, e);
++  }
++
++  /**
++   * @param message - custom exception message
++   */
++  public InvalidStateTransitionException(String message) {
++    super(message);
++  }
++}
++
+diff --git a/lens-server/src/main/java/org/apache/lens/server/scheduler/state/SchedulerJobInstanceState.java b/lens-server/src/main/java/org/apache/lens/server/scheduler/state/SchedulerJobInstanceState.java
+new file mode 100644
+index 0000000..6052a83
+--- /dev/null
++++ b/lens-server/src/main/java/org/apache/lens/server/scheduler/state/SchedulerJobInstanceState.java
+@@ -0,0 +1,166 @@
++package org.apache.lens.server.scheduler.state;
++
++import org.apache.lens.server.scheduler.exception.InvalidStateTransitionException;
++
++import lombok.Getter;
++import lombok.Setter;
++
++/**
++ * State machine for transitions on Scheduler Jobs.
++ */
++public class SchedulerJobInstanceState implements StateMachine<SchedulerJobInstanceState.STATE,
++                                                                SchedulerJobInstanceState.EVENT> {
++
++  @Getter @Setter
++  private STATE currentState;
++
++  private static final STATE INITIAL_STATE = STATE.WAITING;
++
++  @Override
++  public STATE nextTransition(EVENT event) throws InvalidStateTransitionException {
++    return currentState.nextTransition(event);
++  }
++
++  public enum STATE implements StateMachine<SchedulerJobInstanceState.STATE, SchedulerJobInstanceState.EVENT> {
++    // repeating same operation will return the same state to ensure idempotent behavior.
++    WAITING {
++      @Override
++      public STATE nextTransition(EVENT event) throws InvalidStateTransitionException {
++        switch (event) {
++          case ON_CREATION:
++            return this;
++          case ON_CONDITIONS_MET:
++            return STATE.LAUNCHED;
++          case ON_TIME_OUT:
++            return STATE.TIMED_OUT;
++          case ON_RUN:
++          return STATE.RUNNING;
++          case ON_SUCCESS:
++            return STATE.SUCCEEDED;
++          case ON_FAILURE:
++            return STATE.FAILED;
++          case ON_KILL:
++            return STATE.KILLED;
++          default:
++            throw new InvalidStateTransitionException("Event: " + event.name() + " is not a valid event for state: "
++              + this.name());
++        }
++      }
++    },
++
++    LAUNCHED {
++      @Override
++      public STATE nextTransition(EVENT event) throws InvalidStateTransitionException {
++        switch (event) {
++          case ON_CONDITIONS_MET:
++            return this;
++          case ON_RUN:
++            return STATE.RUNNING;
++          case ON_SUCCESS:
++            return STATE.SUCCEEDED;
++          case ON_FAILURE:
++            return STATE.FAILED;
++          case ON_KILL:
++            return STATE.KILLED;
++          default:
++            throw new InvalidStateTransitionException("Event: " + event.name() + " is not a valid event for state: "
++              + this.name());
++        }
++      }
++    },
++
++    RUNNING {
++      @Override
++      public STATE nextTransition(EVENT event) throws InvalidStateTransitionException {
++        switch (event) {
++          case ON_RUN:
++            return this;
++          case ON_SUCCESS:
++            return STATE.SUCCEEDED;
++          case ON_FAILURE:
++            return STATE.FAILED;
++          case ON_KILL:
++            return STATE.KILLED;
++          default:
++            throw new InvalidStateTransitionException("Event: " + event.name() + " is not a valid event for state: "
++              + this.name());
++        }
++      }
++    },
++
++    FAILED {
++      @Override
++      public STATE nextTransition(EVENT event) throws InvalidStateTransitionException {
++        switch (event) {
++          case ON_FAILURE:
++            return this;
++          case ON_RERUN:
++            return STATE.LAUNCHED;
++          default:
++            throw new InvalidStateTransitionException("Event: " + event.name() + " is not a valid event for state: "
++              + this.name());
++        }
++      }
++    },
++
++    SUCCEEDED {
++      @Override
++      public STATE nextTransition(EVENT event) throws InvalidStateTransitionException {
++        switch (event) {
++          case ON_SUCCESS:
++            return this;
++          case ON_RERUN:
++            return STATE.LAUNCHED;
++          default:
++            throw new InvalidStateTransitionException("Event: " + event.name() + " is not a valid event for state: "
++              + this.name());
++        }
++      }
++    },
++
++
++    TIMED_OUT {
++      @Override
++      public STATE nextTransition(EVENT event) throws InvalidStateTransitionException {
++        switch (event) {
++          case ON_TIME_OUT:
++            return this;
++          case ON_RERUN:
++            return STATE.WAITING;
++          default:
++            throw new InvalidStateTransitionException("Event: " + event.name() + " is not a valid event for state: "
++              + this.name());
++        }
++      }
++    },
++
++    KILLED {
++      @Override
++      public STATE nextTransition(EVENT event) throws InvalidStateTransitionException {
++        switch (event) {
++          case ON_KILL:
++            return this;
++          case ON_RERUN:
++            return STATE.LAUNCHED;
++          default:
++            throw new InvalidStateTransitionException("Event: " + event.name() + " is not a valid event for state: "
++              + this.name());
++        }
++      }
++    }
++  }
++
++  /**
++   * All events(actions) which can happen on an instance of <code>SchedulerJob</code>.
++   */
++  public enum EVENT {
++    ON_CREATION, // an instance is first considered by the scheduler.
++    ON_TIME_OUT,
++    ON_CONDITIONS_MET,
++    ON_RUN,
++    ON_SUCCESS,
++    ON_FAILURE,
++    ON_RERUN,
++    ON_KILL
++  }
++}
+diff --git a/lens-server/src/main/java/org/apache/lens/server/scheduler/state/SchedulerJobState.java b/lens-server/src/main/java/org/apache/lens/server/scheduler/state/SchedulerJobState.java
+new file mode 100644
+index 0000000..c59db23
+--- /dev/null
++++ b/lens-server/src/main/java/org/apache/lens/server/scheduler/state/SchedulerJobState.java
+@@ -0,0 +1,122 @@
++package org.apache.lens.server.scheduler.state;
++
++import org.apache.lens.server.scheduler.exception.InvalidStateTransitionException;
++
++import lombok.Getter;
++import lombok.Setter;
++
++/**
++ * State machine for transitions on Scheduler Jobs.
++ */
++public class SchedulerJobState implements StateMachine<SchedulerJobState.STATE, SchedulerJobState.EVENT> {
++
++  @Getter @Setter
++  private STATE currentState;
++
++  private static final STATE INITIAL_STATE = STATE.NEW;
++
++  @Override
++  public STATE nextTransition(EVENT event) throws InvalidStateTransitionException {
++      return currentState.nextTransition(event);
++  }
++
++  public enum STATE implements StateMachine<SchedulerJobState.STATE, SchedulerJobState.EVENT> {
++    // repeating same operation will return the same state to ensure idempotent behavior.
++    NEW {
++      @Override
++      public STATE nextTransition(EVENT event) throws InvalidStateTransitionException {
++        switch (event) {
++          case ON_SUBMIT:
++            return this;
++          case ON_SCHEDULE:
++            return STATE.SCHEDULED;
++          case ON_EXPIRE:
++            return STATE.EXPIRED;
++          case ON_DELETE:
++            return STATE.DELETED;
++          default:
++            throw new InvalidStateTransitionException("Event: " + event.name() + " is not a valid event for state: "
++              + this.name());
++        }
++      }
++    },
++
++    SCHEDULED {
++      @Override
++      public STATE nextTransition(EVENT event) throws InvalidStateTransitionException {
++        switch (event) {
++          case ON_SCHEDULE:
++            return this;
++          case ON_SUSPEND:
++            return STATE.SUSPENDED;
++          case ON_EXPIRE:
++            return STATE.EXPIRED;
++          case ON_DELETE:
++            return STATE.DELETED;
++          default:
++            throw new InvalidStateTransitionException("Event: " + event.name() + " is not a valid event for state: "
++              + this.name());
++        }
++      }
++    },
++
++    SUSPENDED {
++      @Override
++      public STATE nextTransition(EVENT event) throws InvalidStateTransitionException {
++        switch (event) {
++          case ON_SUSPEND:
++            return this;
++          case ON_RESUME:
++            return STATE.SCHEDULED;
++          case ON_EXPIRE:
++            return STATE.EXPIRED;
++          case ON_DELETE:
++            return STATE.DELETED;
++          default:
++            throw new InvalidStateTransitionException("Event: " + event.name() + " is not a valid event for state: "
++              + this.name());
++        }
++      }
++    },
++
++    EXPIRED {
++      @Override
++      public STATE nextTransition(EVENT event) throws InvalidStateTransitionException {
++        switch (event) {
++          case ON_EXPIRE:
++            return this;
++          case ON_DELETE:
++            return STATE.DELETED;
++          default:
++            throw new InvalidStateTransitionException("Event: " + event.name() + " is not a valid event for state: "
++              + this.name());
++        }
++      }
++    },
++
++    DELETED {
++      @Override
++      public STATE nextTransition(EVENT event) throws InvalidStateTransitionException {
++        switch (event) {
++          case ON_DELETE:
++            return this;
++          default:
++            throw new InvalidStateTransitionException("Event: " + event.name() + " is not a valid event for state: "
++            + this.name());
++        }
++      }
++    }
++  }
++
++  /**
++   * All events(actions) which can happen on a Scheduler Job.
++   */
++  public enum EVENT {
++    ON_SUBMIT,
++    ON_SCHEDULE,
++    ON_SUSPEND,
++    ON_RESUME,
++    ON_EXPIRE,
++    ON_DELETE
++  }
++}
+diff --git a/lens-server/src/main/java/org/apache/lens/server/scheduler/state/StateMachine.java b/lens-server/src/main/java/org/apache/lens/server/scheduler/state/StateMachine.java
+new file mode 100644
+index 0000000..3cd43b6
+--- /dev/null
++++ b/lens-server/src/main/java/org/apache/lens/server/scheduler/state/StateMachine.java
+@@ -0,0 +1,35 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.lens.server.scheduler.state;
++
++
++import org.apache.lens.server.scheduler.exception.InvalidStateTransitionException;
++
++/**
++ * Interface to be implemented by a class that handles state transitions.
++ */
++public interface StateMachine<STATE extends Enum<STATE>, EVENT extends Enum<EVENT>> {
++
++  /**
++   * @param event
++   * @return The state that the machine enters into as a result of the event.
++   * @throws InvalidStateTransitionException
++   */
++  STATE nextTransition(EVENT event) throws InvalidStateTransitionException;
++
++}
+\ No newline at end of file
